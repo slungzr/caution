@@ -1,0 +1,10 @@
+.opencode/
+__pycache__/
+cache/
+*.pyc
+
+wencai_cookie.txt
+
+今日操作清单.csv
+今日操作清单.json
+今日操作清单.md
