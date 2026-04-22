@@ -5,6 +5,8 @@ import os
 import re
 import time
 import argparse
+import importlib.util
+import sys
 from datetime import date
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +27,9 @@ UNIFIEDWAP_SCRIPT = BASE_DIR / "wencai_unifiedwap.py"
 MARKET_SNAPSHOT_JSON = BASE_DIR / "最新市场宽度.json"
 OUTPUT_PREFIX = BASE_DIR / "今日操作清单"
 TOP_N = 3
+INDUSTRY_CHANGE_MIN = 0.0
+SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业联动探索.py"
+OPEN_SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业开盘联动探索.py"
 
 
 def parse_args() -> argparse.Namespace:
@@ -125,6 +130,30 @@ def resolve_cookies() -> list[str]:
     return cookies
 
 
+def load_sector_module():
+    if not SECTOR_EXPLORER_SCRIPT.exists():
+        raise FileNotFoundError(f"未找到行业联动脚本: {SECTOR_EXPLORER_SCRIPT}")
+    spec = importlib.util.spec_from_file_location("sector_explorer", SECTOR_EXPLORER_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载行业联动脚本: {SECTOR_EXPLORER_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_open_sector_module():
+    if not OPEN_SECTOR_EXPLORER_SCRIPT.exists():
+        raise FileNotFoundError(f"未找到行业开盘联动脚本: {OPEN_SECTOR_EXPLORER_SCRIPT}")
+    spec = importlib.util.spec_from_file_location("open_sector_explorer", OPEN_SECTOR_EXPLORER_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载行业开盘联动脚本: {OPEN_SECTOR_EXPLORER_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def query_wencai(question: str, cookies: list[str], pause_seconds: float = 1.5) -> pd.DataFrame:
     errors: list[str] = []
     for index, cookie in enumerate(cookies, start=1):
@@ -149,6 +178,124 @@ def query_wencai(question: str, cookies: list[str], pause_seconds: float = 1.5) 
     raise RuntimeError(f"问财查询失败: {'; '.join(errors)}")
 
 
+def fetch_sector_snapshot(
+    sector_mod,
+    trade_date: pd.Timestamp,
+    historical_replay: bool,
+) -> tuple[pd.DataFrame, str]:
+    session = sector_mod.create_session()
+    if historical_replay:
+        open_sector_mod = load_open_sector_module()
+        first_index_df = sector_mod.fetch_first_level_index_list(session)
+        sector_df = open_sector_mod.fetch_first_level_open_history(
+            open_sector_mod.create_session(),
+            first_index_df,
+        ).copy()
+        sector_df = sector_df[sector_df["日期"] == trade_date.normalize()].copy()
+        sector_df = sector_df.rename(
+            columns={
+                "申万一级行业开盘涨幅": "申万一级行业涨跌幅",
+                "申万一级行业开盘涨幅排名": "申万一级行业涨跌幅排名",
+            }
+        )
+        keep_columns = [
+            "日期",
+            "申万一级行业代码",
+            "申万一级行业",
+            "申万一级行业涨跌幅",
+            "申万一级行业涨跌幅排名",
+        ]
+        return sector_df[keep_columns], "申万一级行业开盘涨幅（仅用于历史复盘）"
+
+    cache_path = sector_mod.CACHE_DIR / f"sw_first_realtime_{date_token(trade_date)}.csv"
+    try:
+        response = sector_mod.request_with_retry(
+            session,
+            "https://www.swsresearch.com/institute-sw/api/index_publish/current/",
+            params={
+                "page": "1",
+                "page_size": "100",
+                "indextype": "一级行业",
+            },
+        )
+        realtime_df = pd.DataFrame(response.json()["data"]["results"]).copy()
+        realtime_df = realtime_df.rename(
+            columns={
+                "swindexcode": "申万一级行业代码",
+                "swindexname": "申万一级行业",
+            }
+        )
+        realtime_df["日期"] = trade_date.normalize()
+        realtime_df["申万一级行业昨收"] = pd.to_numeric(realtime_df["l3"], errors="coerce")
+        realtime_df["申万一级行业今开"] = pd.to_numeric(realtime_df["l4"], errors="coerce")
+        realtime_df["申万一级行业成交额"] = pd.to_numeric(realtime_df["l5"], errors="coerce")
+        realtime_df["申万一级行业涨跌幅"] = (
+            realtime_df["申万一级行业今开"] / realtime_df["申万一级行业昨收"] - 1
+        )
+        realtime_df["申万一级行业涨跌幅排名"] = realtime_df["申万一级行业涨跌幅"].rank(
+            ascending=False,
+            method="min",
+        )
+        keep_columns = [
+            "日期",
+            "申万一级行业代码",
+            "申万一级行业",
+            "申万一级行业涨跌幅",
+            "申万一级行业涨跌幅排名",
+            "申万一级行业成交额",
+        ]
+        realtime_df = realtime_df[keep_columns].sort_values(
+            ["申万一级行业涨跌幅排名", "申万一级行业代码"],
+            ascending=[True, True],
+            kind="stable",
+        )
+        sector_mod.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        realtime_df.to_csv(cache_path, index=False, encoding="utf-8-sig")
+        return realtime_df, "申万一级行业开盘涨幅（实时）"
+    except Exception:
+        if not cache_path.exists():
+            raise
+        cached_df = pd.read_csv(cache_path, encoding="utf-8-sig")
+        cached_df["日期"] = sector_mod.normalize_trade_date(cached_df["日期"])
+        for column in ["申万一级行业涨跌幅", "申万一级行业涨跌幅排名"]:
+            if column in cached_df.columns:
+                cached_df[column] = pd.to_numeric(cached_df[column], errors="coerce")
+        return cached_df, "申万一级行业开盘涨幅（缓存）"
+
+
+def attach_sector_context(
+    df: pd.DataFrame,
+    trade_date: pd.Timestamp,
+    historical_replay: bool,
+) -> tuple[pd.DataFrame, str]:
+    sector_mod = load_sector_module()
+    session = sector_mod.create_session()
+    first_index_df = sector_mod.fetch_first_level_index_list(session)
+    first_component_df = sector_mod.fetch_first_level_components(session, first_index_df)
+    industry_history_df = sector_mod.fetch_stock_industry_history(session)
+    histcode_map_df = sector_mod.build_histcode_to_first_map(industry_history_df, first_component_df)
+
+    annotated_input = df.copy()
+    annotated_input["日期"] = trade_date.normalize()
+    annotated_df = sector_mod.annotate_first_industry(
+        annotated_input,
+        industry_history_df,
+        histcode_map_df,
+    )
+    if "申万一级行业代码" in annotated_df.columns:
+        annotated_df["申万一级行业代码"] = annotated_df["申万一级行业代码"].astype(str)
+
+    sector_df, sector_source = fetch_sector_snapshot(sector_mod, trade_date, historical_replay)
+    if "申万一级行业代码" in sector_df.columns:
+        sector_df["申万一级行业代码"] = sector_df["申万一级行业代码"].astype(str)
+    merged_df = annotated_df.merge(
+        sector_df,
+        on=["日期", "申万一级行业代码", "申万一级行业"],
+        how="left",
+    )
+    return merged_df, sector_source
+
+
 def build_queries(today_ts: pd.Timestamp, prev_ts: pd.Timestamp, prev2_ts: pd.Timestamp) -> dict[str, str]:
     today_cn = cn_date(today_ts)
     prev_cn = cn_date(prev_ts)
@@ -170,7 +317,7 @@ def build_queries(today_ts: pd.Timestamp, prev_ts: pd.Timestamp, prev2_ts: pd.Ti
         f"{today_cn}上市天数大于3，{prev_cn}个股热度排名前100"
     )
     amount_query = (
-        f"{today_cn}竞价金额，{today_cn}上市天数大于3，{prev_cn}个股热度排名前100"
+        f"{today_cn}竞价金额，{today_cn}竞价未匹配金额，{today_cn}上市天数大于3，{prev_cn}个股热度排名前100"
     )
     return {"base": base_query, "detail": detail_query, "amount": amount_query}
 
@@ -206,6 +353,7 @@ def standardize_frame(df: pd.DataFrame, date_map: dict[str, str]) -> pd.DataFram
         "竞价涨幅今日": ["竞价涨幅今日", "竞价涨幅"],
         "竞价换手率今日": ["竞价换手率今日", "竞价换手率", "分时换手率今日"],
         "竞价匹配金额_openapi": ["竞价匹配金额_openapi", "竞价金额今日", "竞价金额"],
+        "竞价未匹配金额": ["竞价未匹配金额"],
         "开盘价:不复权今日": ["开盘价:不复权今日", "开盘价今日", "开盘价:不复权"],
         "成交量昨日": ["成交量昨日", "成交量"],
         "成交量前日": ["成交量前日"],
@@ -233,6 +381,7 @@ def standardize_frame(df: pd.DataFrame, date_map: dict[str, str]) -> pd.DataFram
         "竞价涨幅今日",
         "竞价换手率今日",
         "竞价匹配金额_openapi",
+        "竞价未匹配金额",
         "开盘价:不复权今日",
         "成交量昨日",
         "成交量前日",
@@ -276,26 +425,40 @@ def merge_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
 
 def compute_factors(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
+    if "竞价未匹配金额" not in out.columns:
+        out["竞价未匹配金额"] = pd.Series(index=out.index, dtype="float64")
     out["昨收估算"] = out["开盘价:不复权今日"] / (1 + out["竞价涨幅今日"] / 100)
     out["昨日成交额估算"] = out["昨收估算"] * out["成交量昨日"]
     out["竞昨成交比估算"] = out["竞价匹配金额_openapi"] / out["昨日成交额估算"]
     out["昨日前日成交量比"] = out["成交量昨日"] / out["成交量前日"]
+    out["竞价未匹配占比"] = pd.to_numeric(out["竞价未匹配金额"], errors="coerce") / pd.to_numeric(
+        out["竞价匹配金额_openapi"], errors="coerce"
+    )
     return out
 
 
-def apply_strategy(df: pd.DataFrame, snapshot: dict[str, Any], trade_date: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+def apply_strategy(
+    df: pd.DataFrame,
+    snapshot: dict[str, Any],
+    trade_date: pd.Timestamp,
+    sector_source: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     status = {
         "交易日期": trade_date.strftime("%Y-%m-%d"),
         "市场快照日期": snapshot.get("日期"),
         "市场20日高低差": snapshot.get("市场20日高低差"),
         "开仓开关": snapshot.get("开仓开关"),
+        "行业强度口径": sector_source,
+        "行业涨幅阈值": INDUSTRY_CHANGE_MIN,
         "原始候选数": int(len(df)),
     }
 
     if snapshot.get("开仓开关") != "通过":
         status["金额过滤后"] = 0
         status["实体过滤后"] = 0
+        status["行业过滤后"] = 0
         status["最终候选数"] = 0
+        status["入选数"] = 0
         status["结果说明"] = "市场开关未通过，今日空仓"
         return df.head(0).copy(), df.head(0).copy(), status
 
@@ -304,9 +467,13 @@ def apply_strategy(df: pd.DataFrame, snapshot: dict[str, Any], trade_date: pd.Ti
     status["金额过滤后"] = int(len(filtered))
     filtered = filtered[filtered["实体涨跌幅昨日"] < filtered["实体涨跌幅前日"]].copy()
     status["实体过滤后"] = int(len(filtered))
+    if "申万一级行业涨跌幅" not in filtered.columns:
+        raise RuntimeError("缺少申万一级行业涨跌幅，无法执行行业联动过滤")
+    filtered = filtered[pd.to_numeric(filtered["申万一级行业涨跌幅"], errors="coerce") > INDUSTRY_CHANGE_MIN].copy()
+    status["行业过滤后"] = int(len(filtered))
     filtered = filtered.sort_values(
-        ["竞昨成交比估算", "个股热度排名昨日", "基础代码"],
-        ascending=[False, True, True],
+        ["竞价未匹配占比", "竞昨成交比估算", "个股热度排名昨日", "基础代码"],
+        ascending=[False, False, True, True],
         kind="stable",
     ).reset_index(drop=True)
     filtered["排序名次"] = range(1, len(filtered) + 1)
@@ -335,10 +502,17 @@ def export_outputs(
         "排序名次",
         "股票代码",
         "股票简称",
+        "申万一级行业代码",
+        "申万一级行业",
+        "申万一级行业涨跌幅",
+        "申万一级行业涨跌幅排名",
         "竞价匹配金额_openapi",
+        "竞价未匹配金额",
+        "竞价未匹配占比",
         "竞价涨幅今日",
         "竞价换手率今日",
         "开盘价:不复权今日",
+        "量比",
         "成交量昨日",
         "成交量前日",
         "实体涨跌幅昨日",
@@ -379,9 +553,12 @@ def export_outputs(
         f"- 市场快照日期: `{status.get('市场快照日期')}`",
         f"- 市场20日高低差: `{status.get('市场20日高低差')}`",
         f"- 开仓开关: `{status.get('开仓开关')}`",
+        f"- 行业强度口径: `{status.get('行业强度口径')}`",
+        f"- 行业涨幅阈值: `>{status.get('行业涨幅阈值')}`",
         f"- 原始候选数: `{status.get('原始候选数')}`",
         f"- 金额过滤后: `{status.get('金额过滤后', 0)}`",
         f"- 实体过滤后: `{status.get('实体过滤后', 0)}`",
+        f"- 行业过滤后: `{status.get('行业过滤后', 0)}`",
         f"- 最终候选数: `{status.get('最终候选数', 0)}`",
         f"- 入选数: `{status.get('入选数', 0)}`",
         f"- 结果说明: {status.get('结果说明')}",
@@ -393,14 +570,16 @@ def export_outputs(
     else:
         lines.extend(
             [
-                "| 排名 | 股票代码 | 股票简称 | 竞价金额 | 竞昨成交比 | 热度排名昨日 | 建议动作 |",
-                "| --- | --- | --- | ---: | ---: | ---: | --- |",
+                "| 排名 | 股票代码 | 股票简称 | 一级行业 | 行业涨幅 | 行业涨幅排名 | 竞价金额 | 未匹配占比 | 竞昨成交比 | 热度排名昨日 | 建议动作 |",
+                "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
             ]
         )
         for _, row in export_selected.iterrows():
             lines.append(
                 f"| {int(row['排序名次'])} | {row['股票代码']} | {row['股票简称']} | "
-                f"{row['竞价匹配金额_openapi']:.0f} | {row['竞昨成交比估算']:.4f} | "
+                f"{row.get('申万一级行业', '')} | {row.get('申万一级行业涨跌幅', float('nan')):.4f} | "
+                f"{row.get('申万一级行业涨跌幅排名', float('nan')):.0f} | "
+                f"{row['竞价匹配金额_openapi']:.0f} | {row.get('竞价未匹配占比', float('nan')):.4f} | {row['竞昨成交比估算']:.4f} | "
                 f"{row['个股热度排名昨日']:.0f} | {row['建议动作']} |"
             )
 
@@ -428,6 +607,8 @@ def main() -> None:
         if args.trade_date
         else None
     )
+    today_now = pd.Timestamp(date.today()).normalize()
+    historical_replay = explicit_trade_date is not None and explicit_trade_date < today_now
     if explicit_trade_date is None:
         now = datetime.now()
         if now.time() < datetime.strptime("09:25", "%H:%M").time():
@@ -454,14 +635,17 @@ def main() -> None:
         raise RuntimeError("问财返回为空，无法生成操作清单")
 
     merged = compute_factors(merged)
-    filtered, selected, status = apply_strategy(merged, snapshot, today_ts)
+    merged, sector_source = attach_sector_context(merged, today_ts, historical_replay)
+    filtered, selected, status = apply_strategy(merged, snapshot, today_ts, sector_source)
     export_outputs(today_ts, filtered, selected, status, queries)
 
     print(f"交易日期: {status['交易日期']}")
     print(f"市场开关: {status['开仓开关']} / 市场20日高低差={status['市场20日高低差']}")
+    print(f"行业口径: {status['行业强度口径']} / 阈值=涨幅>{status['行业涨幅阈值']}")
     print(f"原始候选数: {status['原始候选数']}")
     print(f"金额过滤后: {status['金额过滤后']}")
     print(f"实体过滤后: {status['实体过滤后']}")
+    print(f"行业过滤后: {status['行业过滤后']}")
     print(f"最终候选数: {status['最终候选数']}")
     print(f"入选数: {status['入选数']}")
     if selected.empty:
@@ -474,7 +658,11 @@ def main() -> None:
                     "排序名次",
                     "股票代码",
                     "股票简称",
+                    "申万一级行业",
+                    "申万一级行业涨跌幅",
+                    "申万一级行业涨跌幅排名",
                     "竞价匹配金额_openapi",
+                    "竞价未匹配占比",
                     "竞昨成交比估算",
                     "个股热度排名昨日",
                 ]
