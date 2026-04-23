@@ -28,6 +28,7 @@ MARKET_SNAPSHOT_JSON = BASE_DIR / "最新市场宽度.json"
 OUTPUT_PREFIX = BASE_DIR / "今日操作清单"
 TOP_N = 3
 INDUSTRY_CHANGE_MIN = 0.0
+PREV_BODY_MIN = 0.0
 SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业联动探索.py"
 OPEN_SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业开盘联动探索.py"
 
@@ -450,6 +451,7 @@ def apply_strategy(
         "开仓开关": snapshot.get("开仓开关"),
         "行业强度口径": sector_source,
         "行业涨幅阈值": INDUSTRY_CHANGE_MIN,
+        "前日实体阈值": PREV_BODY_MIN,
         "原始候选数": int(len(df)),
     }
 
@@ -465,7 +467,9 @@ def apply_strategy(
     filtered = df.copy()
     filtered = filtered[filtered["竞价匹配金额_openapi"] >= 50_000_000].copy()
     status["金额过滤后"] = int(len(filtered))
-    filtered = filtered[filtered["实体涨跌幅昨日"] < filtered["实体涨跌幅前日"]].copy()
+    yesterday_body = pd.to_numeric(filtered["实体涨跌幅昨日"], errors="coerce")
+    prev_body = pd.to_numeric(filtered["实体涨跌幅前日"], errors="coerce")
+    filtered = filtered[(yesterday_body < prev_body) & (prev_body >= PREV_BODY_MIN)].copy()
     status["实体过滤后"] = int(len(filtered))
     if "申万一级行业涨跌幅" not in filtered.columns:
         raise RuntimeError("缺少申万一级行业涨跌幅，无法执行行业联动过滤")
@@ -555,6 +559,7 @@ def export_outputs(
         f"- 开仓开关: `{status.get('开仓开关')}`",
         f"- 行业强度口径: `{status.get('行业强度口径')}`",
         f"- 行业涨幅阈值: `>{status.get('行业涨幅阈值')}`",
+        f"- 前日实体阈值: `>={status.get('前日实体阈值')}`",
         f"- 原始候选数: `{status.get('原始候选数')}`",
         f"- 金额过滤后: `{status.get('金额过滤后', 0)}`",
         f"- 实体过滤后: `{status.get('实体过滤后', 0)}`",
