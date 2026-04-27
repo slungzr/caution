@@ -6,6 +6,7 @@ import re
 import time
 import argparse
 import importlib.util
+import logging
 import sys
 from datetime import date
 from datetime import datetime
@@ -15,6 +16,7 @@ from typing import Any
 import akshare as ak
 import pandas as pd
 import pywencai
+import requests
 
 from wencai_direct import fetch_query_dataframe, load_cookie as load_legacy_cookie
 
@@ -25,12 +27,24 @@ COOKIE_FILE = BASE_DIR / "wencai_cookie.txt"
 PYWENCAI_SCRIPT = BASE_DIR / "竞价因子补充_pywencai.py"
 UNIFIEDWAP_SCRIPT = BASE_DIR / "wencai_unifiedwap.py"
 MARKET_SNAPSHOT_JSON = BASE_DIR / "最新市场宽度.json"
+MARKET_HISTORY_CSV = BASE_DIR / "市场宽度历史.csv"
 OUTPUT_PREFIX = BASE_DIR / "今日操作清单"
-TOP_N = 3
+TOP_N = 2
 INDUSTRY_CHANGE_MIN = 0.0
 PREV_BODY_MIN = 0.0
 SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业联动探索.py"
 OPEN_SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业开盘联动探索.py"
+PUSHPLUS_URL = "http://www.pushplus.plus/send"
+PUSHPLUS_TOKEN = "e60d2f5d230f42739c52712203b9eb93"
+RUN_LOG = BASE_DIR / "自动化运行日志.log"
+
+logging.basicConfig(
+    filename=RUN_LOG,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    encoding="utf-8",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,6 +53,8 @@ def parse_args() -> argparse.Namespace:
         "--trade-date",
         help="指定交易日期，格式 YYYYMMDD，用于历史回放或盘后验证",
     )
+    parser.add_argument("--push", action="store_true", help="历史回放时也发送 PushPlus 推送")
+    parser.add_argument("--no-push", action="store_true", help="本次运行不发送 PushPlus 推送")
     return parser.parse_args()
 
 
@@ -46,6 +62,40 @@ def read_snapshot(snapshot_path: Path) -> dict[str, Any]:
     if not snapshot_path.exists():
         raise FileNotFoundError(f"未找到市场开关快照: {snapshot_path}")
     return json.loads(snapshot_path.read_text(encoding="utf-8"))
+
+
+def read_market_snapshot(trade_date: pd.Timestamp, historical_replay: bool) -> dict[str, Any]:
+    if not historical_replay:
+        return read_snapshot(MARKET_SNAPSHOT_JSON)
+
+    if not MARKET_HISTORY_CSV.exists():
+        raise FileNotFoundError(f"未找到市场宽度历史文件: {MARKET_HISTORY_CSV}")
+
+    history_df = pd.read_csv(MARKET_HISTORY_CSV, encoding="utf-8-sig")
+    if "日期" not in history_df.columns or "市场20日高低差" not in history_df.columns:
+        raise RuntimeError(f"市场宽度历史文件缺少必要字段: {MARKET_HISTORY_CSV}")
+
+    history_df["日期"] = pd.to_datetime(history_df["日期"], errors="coerce").dt.normalize()
+    target_date = trade_date.normalize()
+    matched = history_df[history_df["日期"] == target_date].copy()
+    if matched.empty:
+        raise RuntimeError(
+            f"市场宽度历史缺少 {target_date.strftime('%Y-%m-%d')}，请先运行 获取市场宽度.py 补齐历史数据"
+        )
+
+    row = matched.iloc[-1]
+    diff20 = int(pd.to_numeric(row["市场20日高低差"], errors="raise"))
+    snapshot = {
+        "日期": target_date.strftime("%Y-%m-%d"),
+        "市场20日高低差": diff20,
+        "开仓开关": "通过" if diff20 >= 0 else "不通过",
+        "规则": "市场20日高低差 >= 0",
+        "数据来源": str(MARKET_HISTORY_CSV),
+    }
+    for column in ["市场20日新高数", "市场20日新低数"]:
+        if column in row.index and pd.notna(row[column]):
+            snapshot[column] = int(pd.to_numeric(row[column], errors="raise"))
+    return snapshot
 
 
 def load_trade_calendar() -> pd.DataFrame:
@@ -603,10 +653,70 @@ def export_outputs(
     content = "\n".join(lines)
     latest_md.write_text(content, encoding="utf-8")
     dated_md.write_text(content, encoding="utf-8")
+    logging.info(
+        "导出完成 trade_date=%s selected=%s latest_csv=%s dated_csv=%s candidate_csv=%s",
+        date_text,
+        len(export_selected),
+        latest_csv,
+        dated_csv,
+        candidate_csv,
+    )
+
+
+def format_push_number(value: Any, digits: int = 4) -> str:
+    number = pd.to_numeric(value, errors="coerce")
+    if pd.isna(number):
+        return "-"
+    return f"{float(number):.{digits}f}"
+
+
+def build_pushplus_content(trade_date: pd.Timestamp, selected_df: pd.DataFrame, status: dict[str, Any]) -> str:
+    lines = [
+        f"交易日期: {trade_date.strftime('%Y-%m-%d')}",
+        f"市场开关: {status.get('开仓开关')} / 市场20日高低差={status.get('市场20日高低差')}",
+        f"行业口径: {status.get('行业强度口径')}",
+        f"过滤: 原始{status.get('原始候选数', 0)} -> 金额{status.get('金额过滤后', 0)} -> 实体{status.get('实体过滤后', 0)} -> 行业{status.get('行业过滤后', 0)} -> 入选{status.get('入选数', 0)}",
+        f"说明: {status.get('结果说明')}",
+        "",
+    ]
+
+    if selected_df.empty:
+        lines.append("今日无可操作标的")
+        return "\n".join(lines)
+
+    lines.append(f"今日前{TOP_N}标的:")
+    for _, row in selected_df.iterrows():
+        lines.extend(
+            [
+                f"{int(row['排序名次'])}. {row['股票简称']}（{row['股票代码']}）",
+                f"行业: {row.get('申万一级行业', '-')}",
+                f"建议权重: {format_push_number(row.get('建议权重'), 4)}",
+                f"竞价金额: {format_push_number(row.get('竞价匹配金额_openapi'), 0)}",
+                f"未匹配占比: {format_push_number(row.get('竞价未匹配占比'), 4)}",
+                f"竞昨成交比: {format_push_number(row.get('竞昨成交比估算'), 4)}",
+                f"昨日热度排名: {format_push_number(row.get('个股热度排名昨日'), 0)}",
+                "",
+            ]
+        )
+    return "\n".join(lines).strip()
+
+
+def send_pushplus(title: str, content: str) -> None:
+    payload = {
+        "token": PUSHPLUS_TOKEN,
+        "title": title,
+        "content": content,
+        "template": "txt",
+    }
+    response = requests.post(PUSHPLUS_URL, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
+    response.raise_for_status()
+    logging.info("PushPlus推送成功 title=%s response=%s", title, response.text)
+    print(f"PushPlus推送结果: {response.text}")
 
 
 def main() -> None:
     args = parse_args()
+    logging.info("开始运行 args=%s cwd=%s python=%s", vars(args), Path.cwd(), sys.executable)
     explicit_trade_date = (
         pd.Timestamp(args.trade_date).normalize()
         if args.trade_date
@@ -620,7 +730,20 @@ def main() -> None:
             raise RuntimeError("当前时间早于 09:25，今日竞价数据尚不可用。请 09:25 后再运行，或使用 --trade-date 做历史回放。")
 
     today_ts, prev_ts, prev2_ts = pick_trade_dates(explicit_trade_date.date() if explicit_trade_date is not None else None)
-    snapshot = read_snapshot(MARKET_SNAPSHOT_JSON)
+    logging.info(
+        "交易日定位 today=%s prev=%s prev2=%s historical_replay=%s",
+        today_ts.strftime("%Y-%m-%d"),
+        prev_ts.strftime("%Y-%m-%d"),
+        prev2_ts.strftime("%Y-%m-%d"),
+        historical_replay,
+    )
+    snapshot = read_market_snapshot(today_ts, historical_replay)
+    logging.info(
+        "市场快照 date=%s diff20=%s switch=%s",
+        snapshot.get("日期"),
+        snapshot.get("市场20日高低差"),
+        snapshot.get("开仓开关"),
+    )
     cookies = resolve_cookies()
     queries = build_queries(today_ts, prev_ts, prev2_ts)
     date_map = {
@@ -632,6 +755,7 @@ def main() -> None:
     frames = []
     for label in ["base", "detail", "amount"]:
         frame = query_wencai(queries[label], cookies)
+        logging.info("问财查询完成 label=%s rows=%s", label, len(frame))
         standardized = standardize_frame(frame, date_map)
         frames.append(standardized)
 
@@ -643,6 +767,21 @@ def main() -> None:
     merged, sector_source = attach_sector_context(merged, today_ts, historical_replay)
     filtered, selected, status = apply_strategy(merged, snapshot, today_ts, sector_source)
     export_outputs(today_ts, filtered, selected, status, queries)
+    should_push = not args.no_push and (not historical_replay or args.push)
+    logging.info("推送判断 should_push=%s no_push=%s push=%s", should_push, args.no_push, args.push)
+    if should_push:
+        push_title = f"{today_ts.strftime('%Y-%m-%d')} 竞价爬升操作清单"
+        push_content = build_pushplus_content(today_ts, selected, status)
+        send_pushplus(push_title, push_content)
+    logging.info(
+        "运行成功 trade_date=%s raw=%s amount=%s body=%s industry=%s selected=%s",
+        status.get("交易日期"),
+        status.get("原始候选数"),
+        status.get("金额过滤后"),
+        status.get("实体过滤后"),
+        status.get("行业过滤后"),
+        status.get("入选数"),
+    )
 
     print(f"交易日期: {status['交易日期']}")
     print(f"市场开关: {status['开仓开关']} / 市场20日高低差={status['市场20日高低差']}")
@@ -656,7 +795,7 @@ def main() -> None:
     if selected.empty:
         print("今日无可操作标的")
     else:
-        print("今日前3标的:")
+        print(f"今日前{TOP_N}标的:")
         print(
             selected[
                 [
@@ -679,5 +818,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
+        logging.exception("生成失败")
         print(f"生成失败: {exc}")
         raise SystemExit(1)

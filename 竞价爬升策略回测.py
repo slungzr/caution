@@ -35,6 +35,7 @@ BUY_COMMISSION_RATE = 0.0003
 SELL_COMMISSION_RATE = 0.0003
 STAMP_DUTY_RATE = 0.001
 SLIPPAGE_RATE = 0.0005
+OPEN_PRICE_MISMATCH_THRESHOLD = 0.003
 
 # 硬过滤入口。当前默认不启用，先把真实持仓回测跑通。
 # 示例:
@@ -508,6 +509,91 @@ def get_quote_on_or_before(history_df: pd.DataFrame, trade_date: pd.Timestamp) -
         return None, False
     row = history_df.loc[effective_date]
     return row, pd.Timestamp(effective_date) == trade_date
+
+
+def build_open_price_check(
+    candidate_book: pd.DataFrame,
+    histories: dict[str, pd.DataFrame],
+    threshold: float = OPEN_PRICE_MISMATCH_THRESHOLD,
+) -> pd.DataFrame:
+    columns = [
+        "日期",
+        "股票代码",
+        "股票简称",
+        "基础代码",
+        "CSV开盘价不复权",
+        "日线开盘价不复权",
+        "开盘价偏差",
+        "开盘价偏差绝对值",
+        "阈值",
+        "说明",
+    ]
+    if candidate_book.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, Any]] = []
+    for _, record in candidate_book.iterrows():
+        trade_date = pd.Timestamp(record["日期"]).normalize()
+        code = str(record.get("基础代码", ""))
+        csv_open = pd.to_numeric(record.get("开盘价:不复权今日"), errors="coerce")
+        history_df = histories.get(code, pd.DataFrame())
+        quote, exact_match = get_quote_on_or_before(history_df, trade_date)
+        if quote is None or not exact_match:
+            rows.append(
+                {
+                    "日期": trade_date.strftime("%Y%m%d"),
+                    "股票代码": record.get("股票代码", ""),
+                    "股票简称": record.get("股票简称", ""),
+                    "基础代码": code,
+                    "CSV开盘价不复权": csv_open,
+                    "日线开盘价不复权": pd.NA,
+                    "开盘价偏差": pd.NA,
+                    "开盘价偏差绝对值": pd.NA,
+                    "阈值": threshold,
+                    "说明": "缺少当日日线，无法校验",
+                }
+            )
+            continue
+
+        daily_open = pd.to_numeric(quote.get("open"), errors="coerce")
+        if pd.isna(csv_open) or pd.isna(daily_open) or float(daily_open) <= 0:
+            rows.append(
+                {
+                    "日期": trade_date.strftime("%Y%m%d"),
+                    "股票代码": record.get("股票代码", ""),
+                    "股票简称": record.get("股票简称", ""),
+                    "基础代码": code,
+                    "CSV开盘价不复权": csv_open,
+                    "日线开盘价不复权": daily_open,
+                    "开盘价偏差": pd.NA,
+                    "开盘价偏差绝对值": pd.NA,
+                    "阈值": threshold,
+                    "说明": "开盘价缺失或非法，无法校验",
+                }
+            )
+            continue
+
+        deviation = float(csv_open) / float(daily_open) - 1
+        if abs(deviation) > threshold:
+            rows.append(
+                {
+                    "日期": trade_date.strftime("%Y%m%d"),
+                    "股票代码": record.get("股票代码", ""),
+                    "股票简称": record.get("股票简称", ""),
+                    "基础代码": code,
+                    "CSV开盘价不复权": round(float(csv_open), 4),
+                    "日线开盘价不复权": round(float(daily_open), 4),
+                    "开盘价偏差": round(deviation, 6),
+                    "开盘价偏差绝对值": round(abs(deviation), 6),
+                    "阈值": threshold,
+                    "说明": "CSV开盘价与日线不复权开盘价不一致",
+                }
+            )
+
+    report_df = pd.DataFrame(rows, columns=columns)
+    if not report_df.empty:
+        report_df = report_df.sort_values(["日期", "开盘价偏差绝对值"], ascending=[True, False], kind="stable")
+    return report_df.reset_index(drop=True)
 
 
 def build_trading_calendar(candidate_book: pd.DataFrame, histories: dict[str, pd.DataFrame]) -> list[pd.Timestamp]:
