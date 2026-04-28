@@ -28,6 +28,7 @@ PYWENCAI_SCRIPT = BASE_DIR / "竞价因子补充_pywencai.py"
 UNIFIEDWAP_SCRIPT = BASE_DIR / "wencai_unifiedwap.py"
 MARKET_SNAPSHOT_JSON = BASE_DIR / "最新市场宽度.json"
 MARKET_HISTORY_CSV = BASE_DIR / "市场宽度历史.csv"
+MARKET_WIDTH_SCRIPT = BASE_DIR / "获取市场宽度.py"
 OUTPUT_PREFIX = BASE_DIR / "今日操作清单"
 TOP_N = 2
 INDUSTRY_CHANGE_MIN = 0.0
@@ -64,9 +65,55 @@ def read_snapshot(snapshot_path: Path) -> dict[str, Any]:
     return json.loads(snapshot_path.read_text(encoding="utf-8"))
 
 
-def read_market_snapshot(trade_date: pd.Timestamp, historical_replay: bool) -> dict[str, Any]:
+def refresh_market_snapshot() -> None:
+    if not MARKET_WIDTH_SCRIPT.exists():
+        raise FileNotFoundError(f"未找到市场宽度刷新脚本: {MARKET_WIDTH_SCRIPT}")
+    spec = importlib.util.spec_from_file_location("market_width_refresh", MARKET_WIDTH_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载市场宽度刷新脚本: {MARKET_WIDTH_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    fetched_df = module.fetch_market_breadth()
+    history_df = module.merge_history(module.read_history_if_exists(MARKET_HISTORY_CSV), fetched_df)
+    try:
+        module.export_history(history_df, MARKET_HISTORY_CSV)
+    except PermissionError as exc:
+        logging.warning("市场宽度历史文件写入失败，继续更新最新快照: %s", exc)
+    module.export_snapshot(history_df, MARKET_SNAPSHOT_JSON)
+
+
+def ensure_fresh_snapshot(snapshot: dict[str, Any], required_date: pd.Timestamp | None) -> dict[str, Any]:
+    if required_date is None:
+        return snapshot
+    snapshot_date = pd.Timestamp(snapshot["日期"]).normalize()
+    required_date = required_date.normalize()
+    if snapshot_date >= required_date:
+        return snapshot
+
+    logging.info(
+        "市场快照过期，尝试刷新 snapshot_date=%s required_date=%s",
+        snapshot_date.strftime("%Y-%m-%d"),
+        required_date.strftime("%Y-%m-%d"),
+    )
+    refresh_market_snapshot()
+    snapshot = read_snapshot(MARKET_SNAPSHOT_JSON)
+    snapshot_date = pd.Timestamp(snapshot["日期"]).normalize()
+    if snapshot_date < required_date:
+        raise RuntimeError(
+            f"市场宽度快照过期: 当前 {snapshot_date.strftime('%Y-%m-%d')}，"
+            f"需要至少 {required_date.strftime('%Y-%m-%d')}。请检查 获取市场宽度.py 或数据源。"
+        )
+    return snapshot
+
+
+def read_market_snapshot(
+    trade_date: pd.Timestamp,
+    historical_replay: bool,
+    required_date: pd.Timestamp | None = None,
+) -> dict[str, Any]:
     if not historical_replay:
-        return read_snapshot(MARKET_SNAPSHOT_JSON)
+        return ensure_fresh_snapshot(read_snapshot(MARKET_SNAPSHOT_JSON), required_date)
 
     if not MARKET_HISTORY_CSV.exists():
         raise FileNotFoundError(f"未找到市场宽度历史文件: {MARKET_HISTORY_CSV}")
@@ -368,7 +415,8 @@ def build_queries(today_ts: pd.Timestamp, prev_ts: pd.Timestamp, prev2_ts: pd.Ti
         f"{today_cn}上市天数大于3，{prev_cn}个股热度排名前100"
     )
     amount_query = (
-        f"{today_cn}竞价金额，{today_cn}竞价未匹配金额，{today_cn}上市天数大于3，{prev_cn}个股热度排名前100"
+        f"{today_cn}竞价金额，{today_cn}竞价未匹配金额，{prev_cn}成交金额，"
+        f"{today_cn}上市天数大于3，{prev_cn}个股热度排名前100"
     )
     return {"base": base_query, "detail": detail_query, "amount": amount_query}
 
@@ -406,6 +454,7 @@ def standardize_frame(df: pd.DataFrame, date_map: dict[str, str]) -> pd.DataFram
         "竞价匹配金额_openapi": ["竞价匹配金额_openapi", "竞价金额今日", "竞价金额"],
         "竞价未匹配金额": ["竞价未匹配金额"],
         "开盘价:不复权今日": ["开盘价:不复权今日", "开盘价今日", "开盘价:不复权"],
+        "成交金额昨日": ["成交金额昨日", "成交额昨日", "成交金额", "成交额"],
         "成交量昨日": ["成交量昨日", "成交量"],
         "成交量前日": ["成交量前日"],
         "实体涨跌幅昨日": ["实体涨跌幅昨日", "实体涨跌幅"],
@@ -434,6 +483,7 @@ def standardize_frame(df: pd.DataFrame, date_map: dict[str, str]) -> pd.DataFram
         "竞价匹配金额_openapi",
         "竞价未匹配金额",
         "开盘价:不复权今日",
+        "成交金额昨日",
         "成交量昨日",
         "成交量前日",
         "实体涨跌幅昨日",
@@ -478,9 +528,11 @@ def compute_factors(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "竞价未匹配金额" not in out.columns:
         out["竞价未匹配金额"] = pd.Series(index=out.index, dtype="float64")
-    out["昨收估算"] = out["开盘价:不复权今日"] / (1 + out["竞价涨幅今日"] / 100)
-    out["昨日成交额估算"] = out["昨收估算"] * out["成交量昨日"]
-    out["竞昨成交比估算"] = out["竞价匹配金额_openapi"] / out["昨日成交额估算"]
+    if "成交金额昨日" not in out.columns:
+        raise RuntimeError("缺少昨日成交金额，无法计算竞昨成交比")
+    out["竞昨成交比"] = pd.to_numeric(out["竞价匹配金额_openapi"], errors="coerce") / pd.to_numeric(
+        out["成交金额昨日"], errors="coerce"
+    )
     out["昨日前日成交量比"] = out["成交量昨日"] / out["成交量前日"]
     out["竞价未匹配占比"] = pd.to_numeric(out["竞价未匹配金额"], errors="coerce") / pd.to_numeric(
         out["竞价匹配金额_openapi"], errors="coerce"
@@ -526,7 +578,7 @@ def apply_strategy(
     filtered = filtered[pd.to_numeric(filtered["申万一级行业涨跌幅"], errors="coerce") > INDUSTRY_CHANGE_MIN].copy()
     status["行业过滤后"] = int(len(filtered))
     filtered = filtered.sort_values(
-        ["竞价未匹配占比", "竞昨成交比估算", "个股热度排名昨日", "基础代码"],
+        ["竞价未匹配占比", "竞昨成交比", "个股热度排名昨日", "基础代码"],
         ascending=[False, False, True, True],
         kind="stable",
     ).reset_index(drop=True)
@@ -567,15 +619,14 @@ def export_outputs(
         "竞价换手率今日",
         "开盘价:不复权今日",
         "量比",
+        "成交金额昨日",
         "成交量昨日",
         "成交量前日",
         "实体涨跌幅昨日",
         "实体涨跌幅前日",
         "个股热度排名昨日",
         "连续涨停天数昨日",
-        "昨收估算",
-        "昨日成交额估算",
-        "竞昨成交比估算",
+        "竞昨成交比",
         "昨日前日成交量比",
     ]
     keep_candidate = [column for column in candidate_columns if column in export_filtered.columns]
@@ -634,7 +685,7 @@ def export_outputs(
                 f"| {int(row['排序名次'])} | {row['股票代码']} | {row['股票简称']} | "
                 f"{row.get('申万一级行业', '')} | {row.get('申万一级行业涨跌幅', float('nan')):.4f} | "
                 f"{row.get('申万一级行业涨跌幅排名', float('nan')):.0f} | "
-                f"{row['竞价匹配金额_openapi']:.0f} | {row.get('竞价未匹配占比', float('nan')):.4f} | {row['竞昨成交比估算']:.4f} | "
+                f"{row['竞价匹配金额_openapi']:.0f} | {row.get('竞价未匹配占比', float('nan')):.4f} | {row['竞昨成交比']:.4f} | "
                 f"{row['个股热度排名昨日']:.0f} | {row['建议动作']} |"
             )
 
@@ -693,7 +744,7 @@ def build_pushplus_content(trade_date: pd.Timestamp, selected_df: pd.DataFrame, 
                 f"建议权重: {format_push_number(row.get('建议权重'), 4)}",
                 f"竞价金额: {format_push_number(row.get('竞价匹配金额_openapi'), 0)}",
                 f"未匹配占比: {format_push_number(row.get('竞价未匹配占比'), 4)}",
-                f"竞昨成交比: {format_push_number(row.get('竞昨成交比估算'), 4)}",
+                f"竞昨成交比: {format_push_number(row.get('竞昨成交比'), 4)}",
                 f"昨日热度排名: {format_push_number(row.get('个股热度排名昨日'), 0)}",
                 "",
             ]
@@ -737,7 +788,8 @@ def main() -> None:
         prev2_ts.strftime("%Y-%m-%d"),
         historical_replay,
     )
-    snapshot = read_market_snapshot(today_ts, historical_replay)
+    required_snapshot_date = None if historical_replay else prev_ts
+    snapshot = read_market_snapshot(today_ts, historical_replay, required_snapshot_date)
     logging.info(
         "市场快照 date=%s diff20=%s switch=%s",
         snapshot.get("日期"),
@@ -807,7 +859,7 @@ def main() -> None:
                     "申万一级行业涨跌幅排名",
                     "竞价匹配金额_openapi",
                     "竞价未匹配占比",
-                    "竞昨成交比估算",
+                    "竞昨成交比",
                     "个股热度排名昨日",
                 ]
             ].to_string(index=False)
