@@ -5,6 +5,20 @@ cache/
 
 wencai_cookie.txt
 
+.omx/
+.playwright_wencai_profile/
+自动化运行日志.log
+
+*playwright*.csv
+*playwright*.json
+今日操作清单-*.csv
+今日操作清单-*.json
+今日操作清单-*.md
+今日操作候选池-*.csv
 今日操作清单.csv
 今日操作清单.json
 今日操作清单.md
+
+浠婃棩鎿嶄綔娓呭崟.csv
+浠婃棩鎿嶄綔娓呭崟.json
+浠婃棩鎿嶄綔娓呭崟.md
