@@ -30,7 +30,19 @@ MARKET_SNAPSHOT_JSON = BASE_DIR / "最新市场宽度.json"
 MARKET_HISTORY_CSV = BASE_DIR / "市场宽度历史.csv"
 MARKET_WIDTH_SCRIPT = BASE_DIR / "获取市场宽度.py"
 OUTPUT_PREFIX = BASE_DIR / "今日操作清单"
-TOP_N = 2
+DATA_ARCHIVE_DIR = BASE_DIR / "daily_data" / "竞价爬升"
+ARCHIVE_SUMMARY_CSV = DATA_ARCHIVE_DIR / "竞价爬升-每日采集汇总.csv"
+TOP_N = 3
+MIN_AUCTION_AMOUNT = 50_000_000
+MIN_AUCTION_TO_YESTERDAY_RATIO = 0.022
+DEFAULT_MIN_UNMATCHED_RATIO: float | None = None
+DYNAMIC_TOP_N_ENABLED = True
+DYNAMIC_TOP_N_STRONG_MARKET_DIFF = 500
+DYNAMIC_TOP_N_MIDDLE_MARKET_DIFF = 100
+DYNAMIC_TOP_N_MIDDLE_MARKET_TOP_N = 2
+DYNAMIC_TOP_N_WEAK_MARKET_TOP_N = 1
+ENTRY_DAY_LOW_FROM_OPEN_RISK_EXIT = -0.05
+DEFAULT_INDUSTRY_FILTER_ENABLED = False
 INDUSTRY_CHANGE_MIN = 0.0
 PREV_BODY_MIN = 0.0
 SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业联动探索.py"
@@ -38,6 +50,66 @@ OPEN_SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业开盘联动探索.py"
 PUSHPLUS_URL = "http://www.pushplus.plus/send"
 PUSHPLUS_TOKEN = "e60d2f5d230f42739c52712203b9eb93"
 RUN_LOG = BASE_DIR / "自动化运行日志.log"
+ARCHIVE_SUMMARY_COLUMNS = [
+    "交易日期",
+    "昨日日期",
+    "前日日期",
+    "采集时间",
+    "股票代码",
+    "基础代码",
+    "股票简称",
+    "开盘价:不复权今日",
+    "竞价涨幅今日",
+    "竞价换手率今日",
+    "竞价匹配金额_openapi",
+    "竞价未匹配金额",
+    "竞价未匹配占比",
+    "竞价匹配价今日",
+    "竞价量今日",
+    "竞价未匹配量今日",
+    "竞价异动类型今日",
+    "集合竞价评级今日",
+    "成交量昨日",
+    "成交量前日",
+    "实体涨跌幅昨日",
+    "实体涨跌幅前日",
+    "个股热度排名昨日",
+    "连续涨停天数昨日",
+    "昨收估算",
+    "昨日成交额估算",
+    "竞昨成交比估算",
+    "竞昨成交比",
+    "昨日前日成交量比",
+    "申万一级行业代码",
+    "申万一级行业",
+    "申万一级行业涨跌幅",
+    "申万一级行业涨跌幅排名",
+    "历史回放",
+    "开仓开关",
+    "市场20日高低差",
+    "行业强度口径",
+    "策略原始候选数",
+    "策略配置最大入选数",
+    "策略最大入选数",
+    "策略动态持仓启用",
+    "策略动态持仓强市场阈值",
+    "策略动态持仓中市场阈值",
+    "策略盘后弱承接风控阈值",
+    "策略金额过滤后",
+    "策略竞昨成交比阈值",
+    "策略竞昨过滤后",
+    "策略实体过滤后",
+    "策略行业过滤启用",
+    "策略行业过滤后",
+    "策略未匹配占比阈值",
+    "策略未匹配过滤后",
+    "策略最终候选数",
+    "策略入选数",
+    "策略说明",
+    "是否进入策略候选池",
+    "是否入选",
+    "策略排序名次",
+]
 
 logging.basicConfig(
     filename=RUN_LOG,
@@ -48,6 +120,31 @@ logging.basicConfig(
 )
 
 
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("必须是大于等于 1 的整数")
+    return parsed
+
+
+def resolve_effective_top_n(
+    snapshot: dict[str, Any],
+    configured_top_n: int,
+    dynamic_top_n_enabled: bool = DYNAMIC_TOP_N_ENABLED,
+) -> int:
+    if configured_top_n < 1:
+        raise ValueError("top_n 必须大于等于 1")
+    if not dynamic_top_n_enabled:
+        return configured_top_n
+
+    market_diff = pd.to_numeric(pd.Series([snapshot.get("市场20日高低差")]), errors="coerce").iloc[0]
+    if pd.notna(market_diff) and float(market_diff) >= DYNAMIC_TOP_N_STRONG_MARKET_DIFF:
+        return configured_top_n
+    if pd.notna(market_diff) and float(market_diff) >= DYNAMIC_TOP_N_MIDDLE_MARKET_DIFF:
+        return min(configured_top_n, DYNAMIC_TOP_N_MIDDLE_MARKET_TOP_N)
+    return min(configured_top_n, DYNAMIC_TOP_N_WEAK_MARKET_TOP_N)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="9:25 后生成今日操作清单")
     parser.add_argument(
@@ -56,6 +153,48 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--push", action="store_true", help="历史回放时也发送 PushPlus 推送")
     parser.add_argument("--no-push", action="store_true", help="本次运行不发送 PushPlus 推送")
+    parser.add_argument(
+        "--top-n",
+        type=positive_int,
+        default=TOP_N,
+        help="配置最大入选标的数量，默认 3；动态持仓开启时按市场强弱自动降到 2 或 1",
+    )
+    parser.add_argument(
+        "--fixed-top-n",
+        action="store_true",
+        help="关闭动态持仓，严格使用 --top-n 指定的最大入选数",
+    )
+    parser.add_argument(
+        "--min-auction-ratio",
+        type=float,
+        default=MIN_AUCTION_TO_YESTERDAY_RATIO,
+        help="竞昨成交比最低阈值，默认 0.022；可传 0.02 回放较宽松版本",
+    )
+    parser.add_argument(
+        "--no-auction-ratio-filter",
+        action="store_true",
+        help="关闭竞昨成交比过滤，仅用于回放对照",
+    )
+    parser.add_argument(
+        "--min-unmatched-ratio",
+        type=float,
+        default=DEFAULT_MIN_UNMATCHED_RATIO,
+        help="竞价未匹配占比最低阈值，默认不启用；可传 0.005 回放近期增强版本",
+    )
+    industry_group = parser.add_mutually_exclusive_group()
+    industry_group.add_argument(
+        "--industry-filter",
+        dest="industry_filter",
+        action="store_true",
+        default=DEFAULT_INDUSTRY_FILTER_ENABLED,
+        help="启用申万一级行业涨幅>0过滤，偏保守回放/运行时使用",
+    )
+    industry_group.add_argument(
+        "--no-industry-filter",
+        dest="industry_filter",
+        action="store_false",
+        help="关闭申万一级行业涨幅过滤，当前默认",
+    )
     return parser.parse_args()
 
 
@@ -365,7 +504,7 @@ def attach_sector_context(
     df: pd.DataFrame,
     trade_date: pd.Timestamp,
     historical_replay: bool,
-) -> tuple[pd.DataFrame, str]:
+) -> tuple[pd.DataFrame, pd.DataFrame, str]:
     sector_mod = load_sector_module()
     session = sector_mod.create_session()
     first_index_df = sector_mod.fetch_first_level_index_list(session)
@@ -391,7 +530,196 @@ def attach_sector_context(
         on=["日期", "申万一级行业代码", "申万一级行业"],
         how="left",
     )
-    return merged_df, sector_source
+    return merged_df, sector_df, sector_source
+
+
+def to_json_safe(value: Any) -> Any:
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if hasattr(value, "item"):
+        return value.item()
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=to_json_safe),
+        encoding="utf-8",
+    )
+
+
+def build_archive_record_frame(
+    trade_date: pd.Timestamp,
+    prev_date: pd.Timestamp,
+    prev2_date: pd.Timestamp,
+    merged_df: pd.DataFrame,
+    filtered_df: pd.DataFrame,
+    selected_df: pd.DataFrame,
+    snapshot: dict[str, Any],
+    status: dict[str, Any],
+    sector_source: str,
+    historical_replay: bool,
+) -> pd.DataFrame:
+    out = merged_df.copy()
+    out.insert(0, "交易日期", date_token(trade_date))
+    out.insert(1, "昨日日期", date_token(prev_date))
+    out.insert(2, "前日日期", date_token(prev2_date))
+    out.insert(3, "采集时间", datetime.now().isoformat(timespec="seconds"))
+    out["历史回放"] = historical_replay
+    out["开仓开关"] = snapshot.get("开仓开关")
+    out["市场20日高低差"] = snapshot.get("市场20日高低差")
+    out["行业强度口径"] = sector_source
+    out["策略原始候选数"] = status.get("原始候选数")
+    out["策略配置最大入选数"] = status.get("配置最大入选数")
+    out["策略最大入选数"] = status.get("最大入选数")
+    out["策略动态持仓启用"] = status.get("动态持仓启用")
+    out["策略动态持仓强市场阈值"] = status.get("动态持仓强市场阈值")
+    out["策略动态持仓中市场阈值"] = status.get("动态持仓中市场阈值")
+    out["策略盘后弱承接风控阈值"] = status.get("盘后弱承接风控阈值")
+    out["策略金额过滤后"] = status.get("金额过滤后")
+    out["策略竞昨成交比阈值"] = status.get("竞昨成交比阈值")
+    out["策略竞昨过滤后"] = status.get("竞昨过滤后")
+    out["策略实体过滤后"] = status.get("实体过滤后")
+    out["策略行业过滤启用"] = status.get("行业过滤启用")
+    out["策略行业过滤后"] = status.get("行业过滤后")
+    out["策略未匹配占比阈值"] = status.get("未匹配占比阈值")
+    out["策略未匹配过滤后"] = status.get("未匹配过滤后")
+    out["策略最终候选数"] = status.get("最终候选数")
+    out["策略入选数"] = status.get("入选数")
+    out["策略说明"] = status.get("结果说明")
+
+    filtered_rank = (
+        filtered_df.set_index("基础代码")["排序名次"].to_dict()
+        if not filtered_df.empty and {"基础代码", "排序名次"}.issubset(filtered_df.columns)
+        else {}
+    )
+    selected_codes = set(selected_df["基础代码"]) if "基础代码" in selected_df.columns else set()
+    out["是否进入策略候选池"] = out["基础代码"].isin(filtered_rank.keys())
+    out["是否入选"] = out["基础代码"].isin(selected_codes)
+    out["策略排序名次"] = out["基础代码"].map(filtered_rank)
+    return out
+
+
+def upsert_archive_summary(record_df: pd.DataFrame, trade_date: pd.Timestamp) -> None:
+    ARCHIVE_SUMMARY_CSV.parent.mkdir(parents=True, exist_ok=True)
+    date_text = date_token(trade_date)
+    summary_record_df = record_df[[column for column in ARCHIVE_SUMMARY_COLUMNS if column in record_df.columns]].copy()
+    if ARCHIVE_SUMMARY_CSV.exists():
+        old_df = pd.read_csv(ARCHIVE_SUMMARY_CSV, encoding="utf-8-sig")
+        if "交易日期" in old_df.columns:
+            old_df["交易日期"] = old_df["交易日期"].astype(str)
+            old_df = old_df[old_df["交易日期"] != date_text].copy()
+        if old_df.empty:
+            summary_df = summary_record_df
+        else:
+            summary_df = pd.concat([old_df, summary_record_df], ignore_index=True, sort=False)
+    else:
+        summary_df = summary_record_df
+    summary_df["交易日期"] = summary_df["交易日期"].astype(str)
+    if "基础代码" in summary_df.columns:
+        summary_df["基础代码"] = summary_df["基础代码"].astype(str).str.zfill(6)
+    summary_df = summary_df.sort_values(
+        ["交易日期", "是否入选", "策略排序名次", "基础代码"],
+        ascending=[True, False, True, True],
+        kind="stable",
+    )
+    summary_df.to_csv(ARCHIVE_SUMMARY_CSV, index=False, encoding="utf-8-sig")
+
+
+def archive_daily_data(
+    trade_date: pd.Timestamp,
+    prev_date: pd.Timestamp,
+    prev2_date: pd.Timestamp,
+    raw_frames: dict[str, pd.DataFrame],
+    standardized_frames: dict[str, pd.DataFrame],
+    sector_df: pd.DataFrame,
+    merged_df: pd.DataFrame,
+    filtered_df: pd.DataFrame,
+    selected_df: pd.DataFrame,
+    snapshot: dict[str, Any],
+    status: dict[str, Any],
+    queries: dict[str, str],
+    date_map: dict[str, str],
+    sector_source: str,
+    historical_replay: bool,
+) -> Path:
+    date_text = date_token(trade_date)
+    archive_dir = DATA_ARCHIVE_DIR / date_text
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    files: dict[str, dict[str, Any]] = {}
+
+    def save_csv(filename: str, df: pd.DataFrame) -> None:
+        path = archive_dir / filename
+        df.to_csv(path, index=False, encoding="utf-8-sig")
+        files[filename] = {
+            "rows": int(len(df)),
+            "columns": list(df.columns),
+        }
+
+    for label, frame in raw_frames.items():
+        save_csv(f"问财原始_{label}.csv", frame)
+    for label, frame in standardized_frames.items():
+        save_csv(f"问财标准化_{label}.csv", frame)
+
+    save_csv("申万一级行业快照.csv", sector_df)
+    record_df = build_archive_record_frame(
+        trade_date,
+        prev_date,
+        prev2_date,
+        merged_df,
+        filtered_df,
+        selected_df,
+        snapshot,
+        status,
+        sector_source,
+        historical_replay,
+    )
+    save_csv("全量候选_含行业因子.csv", merged_df)
+    save_csv("每日采集记录.csv", record_df)
+    save_csv("策略候选池.csv", filtered_df)
+    save_csv("入选清单.csv", selected_df)
+    upsert_archive_summary(record_df, trade_date)
+
+    write_json(archive_dir / "市场快照.json", snapshot)
+    write_json(
+        archive_dir / "运行摘要.json",
+        {
+            "schema_version": 1,
+            "run_at": datetime.now().isoformat(timespec="seconds"),
+            "trade_date": trade_date.strftime("%Y-%m-%d"),
+            "prev_date": prev_date.strftime("%Y-%m-%d"),
+            "prev2_date": prev2_date.strftime("%Y-%m-%d"),
+            "historical_replay": historical_replay,
+            "configured_top_n": status.get("配置最大入选数", TOP_N),
+            "top_n": status.get("最大入选数", TOP_N),
+            "dynamic_top_n_enabled": status.get("动态持仓启用", DYNAMIC_TOP_N_ENABLED),
+            "dynamic_top_n_strong_market_diff": DYNAMIC_TOP_N_STRONG_MARKET_DIFF,
+            "dynamic_top_n_middle_market_diff": DYNAMIC_TOP_N_MIDDLE_MARKET_DIFF,
+            "entry_day_low_from_open_risk_exit": status.get("盘后弱承接风控阈值", ENTRY_DAY_LOW_FROM_OPEN_RISK_EXIT),
+            "industry_filter_enabled": status.get("行业过滤启用", DEFAULT_INDUSTRY_FILTER_ENABLED),
+            "industry_change_min": INDUSTRY_CHANGE_MIN,
+            "min_unmatched_ratio": status.get("未匹配占比阈值"),
+            "prev_body_min": PREV_BODY_MIN,
+            "sector_source": sector_source,
+            "status": status,
+            "queries": queries,
+            "date_map": date_map,
+            "files": files,
+            "summary_csv": str(ARCHIVE_SUMMARY_CSV),
+        },
+    )
+    logging.info("每日数据归档完成 trade_date=%s archive_dir=%s", date_text, archive_dir)
+    return archive_dir
 
 
 def build_queries(today_ts: pd.Timestamp, prev_ts: pd.Timestamp, prev2_ts: pd.Timestamp) -> dict[str, str]:
@@ -450,9 +778,12 @@ def standardize_frame(df: pd.DataFrame, date_map: dict[str, str]) -> pd.DataFram
         "股票代码": ["股票代码", "code", "证券代码"],
         "股票简称": ["股票简称", "简称", "股票简称最新"],
         "竞价涨幅今日": ["竞价涨幅今日", "竞价涨幅"],
-        "竞价换手率今日": ["竞价换手率今日", "竞价换手率", "分时换手率今日"],
+        "竞价换手率今日": ["竞价换手率今日", "竞价换手率", "分时换手率今日", "分时换手率["],
         "竞价匹配金额_openapi": ["竞价匹配金额_openapi", "竞价金额今日", "竞价金额"],
         "竞价未匹配金额": ["竞价未匹配金额"],
+        "竞价匹配价今日": ["竞价匹配价今日", "竞价匹配价", "集合竞价匹配价"],
+        "竞价量今日": ["竞价量今日", "竞价量"],
+        "竞价未匹配量今日": ["竞价未匹配量今日", "竞价未匹配量"],
         "开盘价:不复权今日": ["开盘价:不复权今日", "开盘价今日", "开盘价:不复权"],
         "成交金额昨日": ["成交金额昨日", "成交额昨日", "成交金额", "成交额"],
         "成交量昨日": ["成交量昨日", "成交量"],
@@ -482,6 +813,9 @@ def standardize_frame(df: pd.DataFrame, date_map: dict[str, str]) -> pd.DataFram
         "竞价换手率今日",
         "竞价匹配金额_openapi",
         "竞价未匹配金额",
+        "竞价匹配价今日",
+        "竞价量今日",
+        "竞价未匹配量今日",
         "开盘价:不复权今日",
         "成交金额昨日",
         "成交量昨日",
@@ -545,45 +879,77 @@ def apply_strategy(
     snapshot: dict[str, Any],
     trade_date: pd.Timestamp,
     sector_source: str,
+    min_auction_ratio: float | None = MIN_AUCTION_TO_YESTERDAY_RATIO,
+    top_n: int = TOP_N,
+    industry_filter_enabled: bool = DEFAULT_INDUSTRY_FILTER_ENABLED,
+    min_unmatched_ratio: float | None = DEFAULT_MIN_UNMATCHED_RATIO,
+    dynamic_top_n_enabled: bool = DYNAMIC_TOP_N_ENABLED,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    if top_n < 1:
+        raise ValueError("top_n 必须大于等于 1")
+    effective_top_n = resolve_effective_top_n(snapshot, top_n, dynamic_top_n_enabled)
     status = {
         "交易日期": trade_date.strftime("%Y-%m-%d"),
         "市场快照日期": snapshot.get("日期"),
         "市场20日高低差": snapshot.get("市场20日高低差"),
         "开仓开关": snapshot.get("开仓开关"),
         "行业强度口径": sector_source,
+        "行业过滤启用": industry_filter_enabled,
         "行业涨幅阈值": INDUSTRY_CHANGE_MIN,
         "前日实体阈值": PREV_BODY_MIN,
+        "竞昨成交比阈值": min_auction_ratio,
+        "未匹配占比阈值": min_unmatched_ratio,
+        "配置最大入选数": top_n,
+        "最大入选数": effective_top_n,
+        "动态持仓启用": dynamic_top_n_enabled,
+        "动态持仓强市场阈值": DYNAMIC_TOP_N_STRONG_MARKET_DIFF,
+        "动态持仓中市场阈值": DYNAMIC_TOP_N_MIDDLE_MARKET_DIFF,
+        "盘后弱承接风控阈值": ENTRY_DAY_LOW_FROM_OPEN_RISK_EXIT,
         "原始候选数": int(len(df)),
     }
 
     if snapshot.get("开仓开关") != "通过":
         status["金额过滤后"] = 0
+        status["竞昨过滤后"] = 0
         status["实体过滤后"] = 0
         status["行业过滤后"] = 0
+        status["未匹配过滤后"] = 0
         status["最终候选数"] = 0
         status["入选数"] = 0
         status["结果说明"] = "市场开关未通过，今日空仓"
         return df.head(0).copy(), df.head(0).copy(), status
 
     filtered = df.copy()
-    filtered = filtered[filtered["竞价匹配金额_openapi"] >= 50_000_000].copy()
+    filtered = filtered[filtered["竞价匹配金额_openapi"] >= MIN_AUCTION_AMOUNT].copy()
     status["金额过滤后"] = int(len(filtered))
+    if min_auction_ratio is not None:
+        if "竞昨成交比" not in filtered.columns:
+            raise RuntimeError("缺少竞昨成交比，无法执行竞昨成交比过滤")
+        auction_ratio = pd.to_numeric(filtered["竞昨成交比"], errors="coerce")
+        filtered = filtered[auction_ratio >= min_auction_ratio].copy()
+    status["竞昨过滤后"] = int(len(filtered))
     yesterday_body = pd.to_numeric(filtered["实体涨跌幅昨日"], errors="coerce")
     prev_body = pd.to_numeric(filtered["实体涨跌幅前日"], errors="coerce")
     filtered = filtered[(yesterday_body < prev_body) & (prev_body >= PREV_BODY_MIN)].copy()
     status["实体过滤后"] = int(len(filtered))
-    if "申万一级行业涨跌幅" not in filtered.columns:
-        raise RuntimeError("缺少申万一级行业涨跌幅，无法执行行业联动过滤")
-    filtered = filtered[pd.to_numeric(filtered["申万一级行业涨跌幅"], errors="coerce") > INDUSTRY_CHANGE_MIN].copy()
+    if industry_filter_enabled:
+        if "申万一级行业涨跌幅" not in filtered.columns:
+            raise RuntimeError("缺少申万一级行业涨跌幅，无法执行行业联动过滤")
+        filtered = filtered[pd.to_numeric(filtered["申万一级行业涨跌幅"], errors="coerce") > INDUSTRY_CHANGE_MIN].copy()
     status["行业过滤后"] = int(len(filtered))
+    if min_unmatched_ratio is not None:
+        if "竞价未匹配占比" not in filtered.columns:
+            raise RuntimeError("缺少竞价未匹配占比，无法执行未匹配占比过滤")
+        unmatched_ratio = pd.to_numeric(filtered["竞价未匹配占比"], errors="coerce")
+        filtered = filtered[unmatched_ratio >= min_unmatched_ratio].copy()
+    status["未匹配过滤后"] = int(len(filtered))
     filtered = filtered.sort_values(
         ["竞价未匹配占比", "竞昨成交比", "个股热度排名昨日", "基础代码"],
         ascending=[False, False, True, True],
         kind="stable",
     ).reset_index(drop=True)
     filtered["排序名次"] = range(1, len(filtered) + 1)
-    selected = filtered.head(TOP_N).copy()
+    selected = filtered.head(effective_top_n).copy()
     if not selected.empty:
         selected["建议动作"] = "开盘等权买入"
         selected["建议权重"] = round(1 / len(selected), 4)
@@ -591,6 +957,27 @@ def apply_strategy(
     status["入选数"] = int(len(selected))
     status["结果说明"] = "市场开关通过" if not selected.empty else "市场开关通过，但无符合条件标的"
     return filtered, selected, status
+
+
+def format_ratio_threshold(value: Any) -> str:
+    if value is None:
+        return "关闭"
+    number = pd.to_numeric(value, errors="coerce")
+    if pd.isna(number):
+        return "-"
+    return f">={float(number):.4f}"
+
+
+def format_percent(value: Any) -> str:
+    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(number):
+        return "-"
+    return f"{float(number) * 100:.1f}%"
+
+
+def build_risk_exit_note(status: dict[str, Any]) -> str:
+    threshold = format_percent(status.get("盘后弱承接风控阈值", ENTRY_DAY_LOW_FROM_OPEN_RISK_EXIT))
+    return f"盘后弱承接风控: 买入当日最低价较开盘 <= {threshold} 时，次日开盘优先风控卖；否则按 T1 收盘卖，涨停续持。"
 
 
 def export_outputs(
@@ -615,6 +1002,9 @@ def export_outputs(
         "竞价匹配金额_openapi",
         "竞价未匹配金额",
         "竞价未匹配占比",
+        "竞价匹配价今日",
+        "竞价量今日",
+        "竞价未匹配量今日",
         "竞价涨幅今日",
         "竞价换手率今日",
         "开盘价:不复权今日",
@@ -659,12 +1049,22 @@ def export_outputs(
         f"- 市场20日高低差: `{status.get('市场20日高低差')}`",
         f"- 开仓开关: `{status.get('开仓开关')}`",
         f"- 行业强度口径: `{status.get('行业强度口径')}`",
+        f"- 行业过滤: `{'启用' if status.get('行业过滤启用') else '关闭'}`",
         f"- 行业涨幅阈值: `>{status.get('行业涨幅阈值')}`",
         f"- 前日实体阈值: `>={status.get('前日实体阈值')}`",
+        f"- 竞昨成交比阈值: `{format_ratio_threshold(status.get('竞昨成交比阈值'))}`",
+        f"- 未匹配占比阈值: `{format_ratio_threshold(status.get('未匹配占比阈值'))}`",
+        f"- 动态持仓: `{'启用' if status.get('动态持仓启用') else '关闭'}`",
+        f"- 动态持仓档位: `>={status.get('动态持仓强市场阈值')}取TOP3，>={status.get('动态持仓中市场阈值')}取TOP2，否则TOP1`",
+        f"- 配置最大入选数: `{status.get('配置最大入选数', TOP_N)}`",
+        f"- 最大入选数: `{status.get('最大入选数', TOP_N)}`",
+        f"- {build_risk_exit_note(status)}",
         f"- 原始候选数: `{status.get('原始候选数')}`",
         f"- 金额过滤后: `{status.get('金额过滤后', 0)}`",
+        f"- 竞昨过滤后: `{status.get('竞昨过滤后', 0)}`",
         f"- 实体过滤后: `{status.get('实体过滤后', 0)}`",
         f"- 行业过滤后: `{status.get('行业过滤后', 0)}`",
+        f"- 未匹配过滤后: `{status.get('未匹配过滤后', 0)}`",
         f"- 最终候选数: `{status.get('最终候选数', 0)}`",
         f"- 入选数: `{status.get('入选数', 0)}`",
         f"- 结果说明: {status.get('结果说明')}",
@@ -722,11 +1122,17 @@ def format_push_number(value: Any, digits: int = 4) -> str:
 
 
 def build_pushplus_content(trade_date: pd.Timestamp, selected_df: pd.DataFrame, status: dict[str, Any]) -> str:
+    top_n = int(status.get("最大入选数") or TOP_N)
     lines = [
         f"交易日期: {trade_date.strftime('%Y-%m-%d')}",
         f"市场开关: {status.get('开仓开关')} / 市场20日高低差={status.get('市场20日高低差')}",
         f"行业口径: {status.get('行业强度口径')}",
-        f"过滤: 原始{status.get('原始候选数', 0)} -> 金额{status.get('金额过滤后', 0)} -> 实体{status.get('实体过滤后', 0)} -> 行业{status.get('行业过滤后', 0)} -> 入选{status.get('入选数', 0)}",
+        f"行业过滤: {'启用' if status.get('行业过滤启用') else '关闭'}",
+        f"竞昨成交比阈值: {format_ratio_threshold(status.get('竞昨成交比阈值'))}",
+        f"未匹配占比阈值: {format_ratio_threshold(status.get('未匹配占比阈值'))}",
+        f"动态持仓: {'启用' if status.get('动态持仓启用') else '关闭'} / 配置TOP{status.get('配置最大入选数', TOP_N)} -> 今日TOP{status.get('最大入选数', TOP_N)}",
+        build_risk_exit_note(status),
+        f"过滤: 原始{status.get('原始候选数', 0)} -> 金额{status.get('金额过滤后', 0)} -> 竞昨{status.get('竞昨过滤后', 0)} -> 实体{status.get('实体过滤后', 0)} -> 行业{status.get('行业过滤后', 0)} -> 未匹配{status.get('未匹配过滤后', 0)} -> 入选{status.get('入选数', 0)}",
         f"说明: {status.get('结果说明')}",
         "",
     ]
@@ -735,7 +1141,7 @@ def build_pushplus_content(trade_date: pd.Timestamp, selected_df: pd.DataFrame, 
         lines.append("今日无可操作标的")
         return "\n".join(lines)
 
-    lines.append(f"今日前{TOP_N}标的:")
+    lines.append(f"今日前{top_n}标的:")
     for _, row in selected_df.iterrows():
         lines.extend(
             [
@@ -805,10 +1211,14 @@ def main() -> None:
     }
 
     frames = []
+    raw_frames: dict[str, pd.DataFrame] = {}
+    standardized_frames: dict[str, pd.DataFrame] = {}
     for label in ["base", "detail", "amount"]:
         frame = query_wencai(queries[label], cookies)
         logging.info("问财查询完成 label=%s rows=%s", label, len(frame))
+        raw_frames[label] = frame.copy()
         standardized = standardize_frame(frame, date_map)
+        standardized_frames[label] = standardized.copy()
         frames.append(standardized)
 
     merged = merge_frames(frames)
@@ -816,9 +1226,37 @@ def main() -> None:
         raise RuntimeError("问财返回为空，无法生成操作清单")
 
     merged = compute_factors(merged)
-    merged, sector_source = attach_sector_context(merged, today_ts, historical_replay)
-    filtered, selected, status = apply_strategy(merged, snapshot, today_ts, sector_source)
+    merged, sector_df, sector_source = attach_sector_context(merged, today_ts, historical_replay)
+    min_auction_ratio = None if args.no_auction_ratio_filter else args.min_auction_ratio
+    filtered, selected, status = apply_strategy(
+        merged,
+        snapshot,
+        today_ts,
+        sector_source,
+        min_auction_ratio,
+        args.top_n,
+        args.industry_filter,
+        args.min_unmatched_ratio,
+        not args.fixed_top_n,
+    )
     export_outputs(today_ts, filtered, selected, status, queries)
+    archive_dir = archive_daily_data(
+        today_ts,
+        prev_ts,
+        prev2_ts,
+        raw_frames,
+        standardized_frames,
+        sector_df,
+        merged,
+        filtered,
+        selected,
+        snapshot,
+        status,
+        queries,
+        date_map,
+        sector_source,
+        historical_replay,
+    )
     should_push = not args.no_push and (not historical_replay or args.push)
     logging.info("推送判断 should_push=%s no_push=%s push=%s", should_push, args.no_push, args.push)
     if should_push:
@@ -826,28 +1264,46 @@ def main() -> None:
         push_content = build_pushplus_content(today_ts, selected, status)
         send_pushplus(push_title, push_content)
     logging.info(
-        "运行成功 trade_date=%s raw=%s amount=%s body=%s industry=%s selected=%s",
+        "运行成功 trade_date=%s raw=%s amount=%s auction_ratio=%s body=%s industry=%s unmatched=%s selected=%s",
         status.get("交易日期"),
         status.get("原始候选数"),
         status.get("金额过滤后"),
+        status.get("竞昨过滤后"),
         status.get("实体过滤后"),
         status.get("行业过滤后"),
+        status.get("未匹配过滤后"),
         status.get("入选数"),
     )
 
     print(f"交易日期: {status['交易日期']}")
     print(f"市场开关: {status['开仓开关']} / 市场20日高低差={status['市场20日高低差']}")
-    print(f"行业口径: {status['行业强度口径']} / 阈值=涨幅>{status['行业涨幅阈值']}")
+    print(
+        f"行业口径: {status['行业强度口径']} / "
+        f"行业过滤={'启用' if status.get('行业过滤启用') else '关闭'} / "
+        f"阈值=涨幅>{status['行业涨幅阈值']}"
+    )
+    print(f"竞昨成交比阈值: {format_ratio_threshold(status.get('竞昨成交比阈值'))}")
+    print(f"未匹配占比阈值: {format_ratio_threshold(status.get('未匹配占比阈值'))}")
+    print(
+        f"动态持仓: {'启用' if status.get('动态持仓启用') else '关闭'} / "
+        f">={status.get('动态持仓强市场阈值')}取TOP3 / "
+        f">={status.get('动态持仓中市场阈值')}取TOP2 / 否则TOP1 / "
+        f"配置TOP{status.get('配置最大入选数')} -> 今日TOP{status.get('最大入选数')}"
+    )
+    print(build_risk_exit_note(status))
+    print(f"最大入选数: {status['最大入选数']}")
     print(f"原始候选数: {status['原始候选数']}")
     print(f"金额过滤后: {status['金额过滤后']}")
+    print(f"竞昨过滤后: {status['竞昨过滤后']}")
     print(f"实体过滤后: {status['实体过滤后']}")
     print(f"行业过滤后: {status['行业过滤后']}")
+    print(f"未匹配过滤后: {status['未匹配过滤后']}")
     print(f"最终候选数: {status['最终候选数']}")
     print(f"入选数: {status['入选数']}")
     if selected.empty:
         print("今日无可操作标的")
     else:
-        print(f"今日前{TOP_N}标的:")
+        print(f"今日前{status['最大入选数']}标的:")
         print(
             selected[
                 [
@@ -864,6 +1320,8 @@ def main() -> None:
                 ]
             ].to_string(index=False)
         )
+    print(f"数据归档目录: {archive_dir}")
+    print(f"每日采集汇总: {ARCHIVE_SUMMARY_CSV}")
 
 
 if __name__ == "__main__":

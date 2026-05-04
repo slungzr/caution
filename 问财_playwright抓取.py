@@ -84,7 +84,12 @@ def cell_to_csv_value(value: Any) -> Any:
 
 
 def dataframe_from_stockpick_payload(payload: dict[str, Any]) -> pd.DataFrame | None:
-    result_block = payload.get("data", {}).get("result", {})
+    data_block = payload.get("data", {})
+    if not isinstance(data_block, dict):
+        return None
+    result_block = data_block.get("result", {})
+    if not isinstance(result_block, dict):
+        return None
     rows = result_block.get("result")
     if not isinstance(rows, list) or not rows:
         return None
@@ -136,7 +141,9 @@ def payload_row_count(payload: dict[str, Any]) -> int:
     return 0 if df is None else len(df)
 
 
-def dataframe_from_payload(payload: dict[str, Any]) -> pd.DataFrame | None:
+def dataframe_from_payload(payload: Any) -> pd.DataFrame | None:
+    if not isinstance(payload, dict):
+        return None
     return dataframe_from_stockpick_payload(payload) or dataframe_from_unified_payload(payload)
 
 
@@ -556,6 +563,24 @@ def run_strategy(args: argparse.Namespace) -> int:
         trade_date=args.trade_date,
         push=args.push,
         no_push=args.no_push,
+        top_n=args.top_n if args.top_n is not None else strategy.TOP_N,
+        fixed_top_n=args.fixed_top_n,
+        min_auction_ratio=(
+            args.min_auction_ratio
+            if args.min_auction_ratio is not None
+            else strategy.MIN_AUCTION_TO_YESTERDAY_RATIO
+        ),
+        no_auction_ratio_filter=args.no_auction_ratio_filter,
+        min_unmatched_ratio=(
+            args.min_unmatched_ratio
+            if args.min_unmatched_ratio is not None
+            else strategy.DEFAULT_MIN_UNMATCHED_RATIO
+        ),
+        industry_filter=(
+            args.industry_filter
+            if args.industry_filter is not None
+            else strategy.DEFAULT_INDUSTRY_FILTER_ENABLED
+        ),
     )
     strategy.parse_args = lambda: strategy_args
     strategy.resolve_cookies = lambda: ["playwright"]
@@ -587,6 +612,25 @@ def main() -> int:
     parser.add_argument("--trade-date", default=None, help="传给生成今日操作清单.py 的交易日期 YYYYMMDD")
     parser.add_argument("--push", action="store_true", help="策略模式下允许历史回放推送")
     parser.add_argument("--no-push", action="store_true", help="策略模式下不发送 PushPlus")
+    parser.add_argument("--top-n", type=int, default=None, help="策略模式下传给生成今日操作清单.py 的最大入选数")
+    parser.add_argument("--fixed-top-n", action="store_true", help="策略模式下关闭动态持仓，严格使用 --top-n")
+    parser.add_argument("--min-auction-ratio", type=float, default=None, help="策略模式下竞昨成交比最低阈值")
+    parser.add_argument("--no-auction-ratio-filter", action="store_true", help="策略模式下关闭竞昨成交比过滤")
+    parser.add_argument("--min-unmatched-ratio", type=float, default=None, help="策略模式下竞价未匹配占比最低阈值")
+    industry_group = parser.add_mutually_exclusive_group()
+    industry_group.add_argument(
+        "--industry-filter",
+        dest="industry_filter",
+        action="store_true",
+        default=None,
+        help="策略模式下启用申万一级行业涨幅>0过滤",
+    )
+    industry_group.add_argument(
+        "--no-industry-filter",
+        dest="industry_filter",
+        action="store_false",
+        help="策略模式下关闭申万一级行业涨幅过滤",
+    )
     parser.add_argument("--profile-dir", default=".playwright_wencai_profile", help="Chrome 持久化用户目录")
     parser.add_argument("--out-dir", default=str(BASE_DIR), help="输出目录")
     parser.add_argument("--prefix", default=None, help="输出文件名前缀")

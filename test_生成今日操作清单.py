@@ -166,6 +166,15 @@ class DailyOperationListTests(unittest.TestCase):
             "实体过滤后": 1,
             "行业过滤后": 1,
             "入选数": 1,
+            "竞昨成交比阈值": 0.022,
+            "配置最大入选数": 3,
+            "最大入选数": 3,
+            "动态持仓启用": True,
+            "竞昨过滤后": 1,
+            "行业过滤启用": False,
+            "未匹配占比阈值": None,
+            "未匹配过滤后": 1,
+            "盘后弱承接风控阈值": -0.05,
             "结果说明": "测试",
         }
 
@@ -176,6 +185,237 @@ class DailyOperationListTests(unittest.TestCase):
         )
 
         self.assertIn("竞昨成交比: 0.0500", content)
+        self.assertIn("竞昨成交比阈值: >=0.0220", content)
+        self.assertIn("未匹配占比阈值: 关闭", content)
+        self.assertIn("动态持仓: 启用 / 配置TOP3 -> 今日TOP3", content)
+        self.assertIn("盘后弱承接风控", content)
+        self.assertIn("<= -5.0%", content)
+        self.assertIn("行业过滤: 关闭", content)
+        self.assertIn("今日前3标的", content)
+
+    def test_apply_strategy_filters_default_low_auction_ratio(self) -> None:
+        df = pd.DataFrame(
+            {
+                "基础代码": ["000001", "000002", "000003"],
+                "股票代码": ["000001", "000002", "000003"],
+                "股票简称": ["低比", "达标", "高比"],
+                "竞价匹配金额_openapi": [60_000_000, 60_000_000, 60_000_000],
+                "竞昨成交比": [0.021, 0.022, 0.05],
+                "竞价未匹配占比": [0.3, 0.2, 0.1],
+                "实体涨跌幅昨日": [1.0, 1.0, 1.0],
+                "实体涨跌幅前日": [2.0, 2.0, 2.0],
+                "申万一级行业涨跌幅": [1.0, 1.0, 1.0],
+                "个股热度排名昨日": [10, 11, 12],
+            }
+        )
+        snapshot = {"日期": "2026-04-28", "市场20日高低差": 600, "开仓开关": "通过"}
+
+        filtered, selected, status = daily_operation_list.apply_strategy(
+            df,
+            snapshot,
+            pd.Timestamp("2026-04-28"),
+            "测试行业口径",
+        )
+
+        self.assertEqual(status["金额过滤后"], 3)
+        self.assertEqual(status["竞昨成交比阈值"], 0.022)
+        self.assertEqual(status["配置最大入选数"], 3)
+        self.assertEqual(status["最大入选数"], 3)
+        self.assertTrue(status["动态持仓启用"])
+        self.assertFalse(status["行业过滤启用"])
+        self.assertEqual(status["竞昨过滤后"], 2)
+        self.assertIsNone(status["未匹配占比阈值"])
+        self.assertEqual(status["未匹配过滤后"], 2)
+        self.assertEqual(set(filtered["基础代码"]), {"000002", "000003"})
+        self.assertEqual(len(selected), 2)
+
+    def test_apply_strategy_accepts_top_n_override(self) -> None:
+        df = pd.DataFrame(
+            {
+                "基础代码": ["000001", "000002", "000003"],
+                "股票代码": ["000001", "000002", "000003"],
+                "股票简称": ["一号", "二号", "三号"],
+                "竞价匹配金额_openapi": [60_000_000, 60_000_000, 60_000_000],
+                "竞昨成交比": [0.03, 0.04, 0.05],
+                "竞价未匹配占比": [0.3, 0.2, 0.1],
+                "实体涨跌幅昨日": [1.0, 1.0, 1.0],
+                "实体涨跌幅前日": [2.0, 2.0, 2.0],
+                "申万一级行业涨跌幅": [1.0, 1.0, 1.0],
+                "个股热度排名昨日": [10, 11, 12],
+            }
+        )
+        snapshot = {"日期": "2026-04-28", "市场20日高低差": 351, "开仓开关": "通过"}
+
+        _filtered, selected, status = daily_operation_list.apply_strategy(
+            df,
+            snapshot,
+            pd.Timestamp("2026-04-28"),
+            "测试行业口径",
+            top_n=2,
+        )
+
+        self.assertEqual(status["最大入选数"], 2)
+        self.assertEqual(len(selected), 2)
+
+    def test_apply_strategy_uses_dynamic_top_n_in_weaker_market(self) -> None:
+        df = pd.DataFrame(
+            {
+                "基础代码": ["000001", "000002", "000003"],
+                "股票代码": ["000001", "000002", "000003"],
+                "股票简称": ["一号", "二号", "三号"],
+                "竞价匹配金额_openapi": [60_000_000, 60_000_000, 60_000_000],
+                "竞昨成交比": [0.03, 0.04, 0.05],
+                "竞价未匹配占比": [0.3, 0.2, 0.1],
+                "实体涨跌幅昨日": [1.0, 1.0, 1.0],
+                "实体涨跌幅前日": [2.0, 2.0, 2.0],
+                "申万一级行业涨跌幅": [1.0, 1.0, 1.0],
+                "个股热度排名昨日": [10, 11, 12],
+            }
+        )
+        snapshot = {"日期": "2026-04-28", "市场20日高低差": 251, "开仓开关": "通过"}
+
+        _filtered, selected_dynamic, status_dynamic = daily_operation_list.apply_strategy(
+            df,
+            snapshot,
+            pd.Timestamp("2026-04-28"),
+            "测试行业口径",
+        )
+        _filtered, selected_fixed, status_fixed = daily_operation_list.apply_strategy(
+            df,
+            snapshot,
+            pd.Timestamp("2026-04-28"),
+            "测试行业口径",
+            dynamic_top_n_enabled=False,
+        )
+
+        self.assertEqual(status_dynamic["配置最大入选数"], 3)
+        self.assertEqual(status_dynamic["最大入选数"], 2)
+        self.assertEqual(len(selected_dynamic), 2)
+        self.assertFalse(status_fixed["动态持仓启用"])
+        self.assertEqual(status_fixed["最大入选数"], 3)
+        self.assertEqual(len(selected_fixed), 3)
+
+    def test_apply_strategy_uses_top1_in_low_positive_market(self) -> None:
+        df = pd.DataFrame(
+            {
+                "基础代码": ["000001", "000002", "000003"],
+                "股票代码": ["000001", "000002", "000003"],
+                "股票简称": ["一号", "二号", "三号"],
+                "竞价匹配金额_openapi": [60_000_000, 60_000_000, 60_000_000],
+                "竞昨成交比": [0.03, 0.04, 0.05],
+                "竞价未匹配占比": [0.3, 0.2, 0.1],
+                "实体涨跌幅昨日": [1.0, 1.0, 1.0],
+                "实体涨跌幅前日": [2.0, 2.0, 2.0],
+                "申万一级行业涨跌幅": [1.0, 1.0, 1.0],
+                "个股热度排名昨日": [10, 11, 12],
+            }
+        )
+        snapshot = {"日期": "2026-04-28", "市场20日高低差": 50, "开仓开关": "通过"}
+
+        _filtered, selected, status = daily_operation_list.apply_strategy(
+            df,
+            snapshot,
+            pd.Timestamp("2026-04-28"),
+            "测试行业口径",
+        )
+
+        self.assertEqual(status["最大入选数"], 1)
+        self.assertEqual(len(selected), 1)
+
+    def test_apply_strategy_industry_filter_is_optional(self) -> None:
+        df = pd.DataFrame(
+            {
+                "基础代码": ["000001", "000002"],
+                "股票代码": ["000001", "000002"],
+                "股票简称": ["弱行业", "强行业"],
+                "竞价匹配金额_openapi": [60_000_000, 60_000_000],
+                "竞昨成交比": [0.03, 0.04],
+                "竞价未匹配占比": [0.3, 0.2],
+                "实体涨跌幅昨日": [1.0, 1.0],
+                "实体涨跌幅前日": [2.0, 2.0],
+                "申万一级行业涨跌幅": [-0.5, 1.0],
+                "个股热度排名昨日": [10, 11],
+            }
+        )
+        snapshot = {"日期": "2026-04-28", "市场20日高低差": 351, "开仓开关": "通过"}
+
+        filtered_default, _selected_default, status_default = daily_operation_list.apply_strategy(
+            df,
+            snapshot,
+            pd.Timestamp("2026-04-28"),
+            "测试行业口径",
+        )
+        filtered_enabled, _selected_enabled, status_enabled = daily_operation_list.apply_strategy(
+            df,
+            snapshot,
+            pd.Timestamp("2026-04-28"),
+            "测试行业口径",
+            industry_filter_enabled=True,
+        )
+
+        self.assertFalse(status_default["行业过滤启用"])
+        self.assertEqual(set(filtered_default["基础代码"]), {"000001", "000002"})
+        self.assertTrue(status_enabled["行业过滤启用"])
+        self.assertEqual(set(filtered_enabled["基础代码"]), {"000002"})
+
+    def test_apply_strategy_can_filter_min_unmatched_ratio(self) -> None:
+        df = pd.DataFrame(
+            {
+                "基础代码": ["000001", "000002", "000003"],
+                "股票代码": ["000001", "000002", "000003"],
+                "股票简称": ["负未匹配", "低未匹配", "达标"],
+                "竞价匹配金额_openapi": [60_000_000, 60_000_000, 60_000_000],
+                "竞昨成交比": [0.03, 0.04, 0.05],
+                "竞价未匹配占比": [-0.01, 0.003, 0.006],
+                "实体涨跌幅昨日": [1.0, 1.0, 1.0],
+                "实体涨跌幅前日": [2.0, 2.0, 2.0],
+                "申万一级行业涨跌幅": [1.0, 1.0, 1.0],
+                "个股热度排名昨日": [10, 11, 12],
+            }
+        )
+        snapshot = {"日期": "2026-04-28", "市场20日高低差": 351, "开仓开关": "通过"}
+
+        filtered, selected, status = daily_operation_list.apply_strategy(
+            df,
+            snapshot,
+            pd.Timestamp("2026-04-28"),
+            "测试行业口径",
+            min_unmatched_ratio=0.005,
+        )
+
+        self.assertEqual(status["未匹配占比阈值"], 0.005)
+        self.assertEqual(status["未匹配过滤后"], 1)
+        self.assertEqual(filtered["基础代码"].tolist(), ["000003"])
+        self.assertEqual(selected["基础代码"].tolist(), ["000003"])
+
+    def test_apply_strategy_can_disable_auction_ratio_filter(self) -> None:
+        df = pd.DataFrame(
+            {
+                "基础代码": ["000001", "000002"],
+                "股票代码": ["000001", "000002"],
+                "股票简称": ["低比", "达标"],
+                "竞价匹配金额_openapi": [60_000_000, 60_000_000],
+                "竞昨成交比": [0.001, 0.02],
+                "竞价未匹配占比": [0.3, 0.2],
+                "实体涨跌幅昨日": [1.0, 1.0],
+                "实体涨跌幅前日": [2.0, 2.0],
+                "申万一级行业涨跌幅": [1.0, 1.0],
+                "个股热度排名昨日": [10, 11],
+            }
+        )
+        snapshot = {"日期": "2026-04-28", "市场20日高低差": 351, "开仓开关": "通过"}
+
+        filtered, _selected, status = daily_operation_list.apply_strategy(
+            df,
+            snapshot,
+            pd.Timestamp("2026-04-28"),
+            "测试行业口径",
+            min_auction_ratio=None,
+        )
+
+        self.assertIsNone(status["竞昨成交比阈值"])
+        self.assertEqual(status["竞昨过滤后"], 2)
+        self.assertEqual(set(filtered["基础代码"]), {"000001", "000002"})
 
 
 if __name__ == "__main__":
