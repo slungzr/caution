@@ -559,6 +559,8 @@ def load_strategy_module():
 
 def run_strategy(args: argparse.Namespace) -> int:
     strategy = load_strategy_module()
+    arg_min_auction_change = getattr(args, "min_auction_change", None)
+    arg_max_auction_change = getattr(args, "max_auction_change", None)
     strategy_args = argparse.Namespace(
         trade_date=args.trade_date,
         push=args.push,
@@ -571,6 +573,17 @@ def run_strategy(args: argparse.Namespace) -> int:
             else strategy.MIN_AUCTION_TO_YESTERDAY_RATIO
         ),
         no_auction_ratio_filter=args.no_auction_ratio_filter,
+        min_auction_change=(
+            arg_min_auction_change
+            if arg_min_auction_change is not None
+            else getattr(strategy, "MIN_AUCTION_CHANGE", None)
+        ),
+        max_auction_change=(
+            arg_max_auction_change
+            if arg_max_auction_change is not None
+            else getattr(strategy, "MAX_AUCTION_CHANGE", None)
+        ),
+        no_auction_change_filter=getattr(args, "no_auction_change_filter", False),
         min_unmatched_ratio=(
             args.min_unmatched_ratio
             if args.min_unmatched_ratio is not None
@@ -581,6 +594,7 @@ def run_strategy(args: argparse.Namespace) -> int:
             if args.industry_filter is not None
             else strategy.DEFAULT_INDUSTRY_FILTER_ENABLED
         ),
+        no_execution_advice=getattr(args, "no_execution_advice", False),
     )
     strategy.parse_args = lambda: strategy_args
     strategy.resolve_cookies = lambda: ["playwright"]
@@ -616,7 +630,11 @@ def main() -> int:
     parser.add_argument("--fixed-top-n", action="store_true", help="策略模式下关闭动态持仓，严格使用 --top-n")
     parser.add_argument("--min-auction-ratio", type=float, default=None, help="策略模式下竞昨成交比最低阈值")
     parser.add_argument("--no-auction-ratio-filter", action="store_true", help="策略模式下关闭竞昨成交比过滤")
+    parser.add_argument("--min-auction-change", type=float, default=None, help="策略模式下竞价涨幅最低阈值，默认跟随正式脚本")
+    parser.add_argument("--max-auction-change", type=float, default=None, help="策略模式下竞价涨幅最高阈值，默认跟随正式脚本")
+    parser.add_argument("--no-auction-change-filter", action="store_true", help="策略模式下关闭竞价涨幅过滤")
     parser.add_argument("--min-unmatched-ratio", type=float, default=None, help="策略模式下竞价未匹配占比最低阈值")
+    parser.add_argument("--no-execution-advice", action="store_true", help="策略模式下不输出挂单建议列")
     industry_group = parser.add_mutually_exclusive_group()
     industry_group.add_argument(
         "--industry-filter",

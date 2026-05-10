@@ -154,6 +154,7 @@ class DailyOperationListTests(unittest.TestCase):
                 "竞价匹配金额_openapi": [50_000_000],
                 "竞价未匹配占比": [0.2],
                 "竞昨成交比": [0.05],
+                "竞价涨幅今日": 0,
                 "个股热度排名昨日": [12],
             }
         )
@@ -201,6 +202,7 @@ class DailyOperationListTests(unittest.TestCase):
                 "股票简称": ["低比", "达标", "高比"],
                 "竞价匹配金额_openapi": [60_000_000, 60_000_000, 60_000_000],
                 "竞昨成交比": [0.021, 0.022, 0.05],
+                "竞价涨幅今日": 0,
                 "竞价未匹配占比": [0.3, 0.2, 0.1],
                 "实体涨跌幅昨日": [1.0, 1.0, 1.0],
                 "实体涨跌幅前日": [2.0, 2.0, 2.0],
@@ -228,6 +230,7 @@ class DailyOperationListTests(unittest.TestCase):
         self.assertEqual(status["未匹配过滤后"], 2)
         self.assertEqual(set(filtered["基础代码"]), {"000002", "000003"})
         self.assertEqual(len(selected), 2)
+        self.assertIn("挂单建议", selected.columns)
 
     def test_apply_strategy_accepts_top_n_override(self) -> None:
         df = pd.DataFrame(
@@ -237,6 +240,7 @@ class DailyOperationListTests(unittest.TestCase):
                 "股票简称": ["一号", "二号", "三号"],
                 "竞价匹配金额_openapi": [60_000_000, 60_000_000, 60_000_000],
                 "竞昨成交比": [0.03, 0.04, 0.05],
+                "竞价涨幅今日": 0,
                 "竞价未匹配占比": [0.3, 0.2, 0.1],
                 "实体涨跌幅昨日": [1.0, 1.0, 1.0],
                 "实体涨跌幅前日": [2.0, 2.0, 2.0],
@@ -265,6 +269,7 @@ class DailyOperationListTests(unittest.TestCase):
                 "股票简称": ["一号", "二号", "三号"],
                 "竞价匹配金额_openapi": [60_000_000, 60_000_000, 60_000_000],
                 "竞昨成交比": [0.03, 0.04, 0.05],
+                "竞价涨幅今日": 0,
                 "竞价未匹配占比": [0.3, 0.2, 0.1],
                 "实体涨跌幅昨日": [1.0, 1.0, 1.0],
                 "实体涨跌幅前日": [2.0, 2.0, 2.0],
@@ -303,6 +308,7 @@ class DailyOperationListTests(unittest.TestCase):
                 "股票简称": ["一号", "二号", "三号"],
                 "竞价匹配金额_openapi": [60_000_000, 60_000_000, 60_000_000],
                 "竞昨成交比": [0.03, 0.04, 0.05],
+                "竞价涨幅今日": 0,
                 "竞价未匹配占比": [0.3, 0.2, 0.1],
                 "实体涨跌幅昨日": [1.0, 1.0, 1.0],
                 "实体涨跌幅前日": [2.0, 2.0, 2.0],
@@ -322,6 +328,52 @@ class DailyOperationListTests(unittest.TestCase):
         self.assertEqual(status["最大入选数"], 1)
         self.assertEqual(len(selected), 1)
 
+    def test_execution_advice_marks_high_when_open_low_risk_is_high(self) -> None:
+        row = pd.Series(
+            {
+                "排序名次": 2,
+                "竞价涨幅今日": 0.8,
+                "竞昨成交比": 0.025,
+            }
+        )
+
+        advice = daily_operation_list.build_execution_advice(row, "强")
+
+        self.assertEqual(advice["挂单建议"], "挂高")
+        self.assertEqual(advice["建议挂单溢价"], daily_operation_list.EXECUTION_HIGH_PREMIUM)
+        self.assertIn("竞价涨幅0~2%", advice["挂单建议理由"])
+
+    def test_execution_advice_marks_low_for_middle_market_negative_auction(self) -> None:
+        row = pd.Series(
+            {
+                "排序名次": 1,
+                "竞价涨幅今日": -3.8,
+                "竞昨成交比": 0.04,
+            }
+        )
+
+        advice = daily_operation_list.build_execution_advice(row, "中")
+
+        self.assertEqual(advice["挂单建议"], "挂低")
+        self.assertEqual(advice["建议挂单溢价"], daily_operation_list.EXECUTION_LOW_DISCOUNT)
+        self.assertEqual(advice["挂单上限溢价"], daily_operation_list.EXECUTION_LOW_DISCOUNT_MAX)
+        self.assertIn("中市场负竞价", advice["挂单建议理由"])
+
+    def test_execution_advice_marks_no_chase_when_auction_change_is_too_hot(self) -> None:
+        row = pd.Series(
+            {
+                "排序名次": 1,
+                "竞价涨幅今日": 5.8,
+                "竞昨成交比": 0.026,
+            }
+        )
+
+        advice = daily_operation_list.build_execution_advice(row, "强")
+
+        self.assertEqual(advice["挂单建议"], "不追")
+        self.assertEqual(advice["建议挂单溢价"], daily_operation_list.EXECUTION_NO_CHASE_PREMIUM)
+        self.assertIn("竞价涨幅>5%", advice["挂单建议理由"])
+
     def test_apply_strategy_industry_filter_is_optional(self) -> None:
         df = pd.DataFrame(
             {
@@ -330,6 +382,7 @@ class DailyOperationListTests(unittest.TestCase):
                 "股票简称": ["弱行业", "强行业"],
                 "竞价匹配金额_openapi": [60_000_000, 60_000_000],
                 "竞昨成交比": [0.03, 0.04],
+                "竞价涨幅今日": 0,
                 "竞价未匹配占比": [0.3, 0.2],
                 "实体涨跌幅昨日": [1.0, 1.0],
                 "实体涨跌幅前日": [2.0, 2.0],
@@ -366,6 +419,7 @@ class DailyOperationListTests(unittest.TestCase):
                 "股票简称": ["负未匹配", "低未匹配", "达标"],
                 "竞价匹配金额_openapi": [60_000_000, 60_000_000, 60_000_000],
                 "竞昨成交比": [0.03, 0.04, 0.05],
+                "竞价涨幅今日": 0,
                 "竞价未匹配占比": [-0.01, 0.003, 0.006],
                 "实体涨跌幅昨日": [1.0, 1.0, 1.0],
                 "实体涨跌幅前日": [2.0, 2.0, 2.0],
@@ -396,6 +450,7 @@ class DailyOperationListTests(unittest.TestCase):
                 "股票简称": ["低比", "达标"],
                 "竞价匹配金额_openapi": [60_000_000, 60_000_000],
                 "竞昨成交比": [0.001, 0.02],
+                "竞价涨幅今日": 0,
                 "竞价未匹配占比": [0.3, 0.2],
                 "实体涨跌幅昨日": [1.0, 1.0],
                 "实体涨跌幅前日": [2.0, 2.0],

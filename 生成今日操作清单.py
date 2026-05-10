@@ -35,6 +35,8 @@ ARCHIVE_SUMMARY_CSV = DATA_ARCHIVE_DIR / "竞价爬升-每日采集汇总.csv"
 TOP_N = 3
 MIN_AUCTION_AMOUNT = 50_000_000
 MIN_AUCTION_TO_YESTERDAY_RATIO = 0.022
+MIN_AUCTION_CHANGE = -8.0
+MAX_AUCTION_CHANGE = 6.0
 DEFAULT_MIN_UNMATCHED_RATIO: float | None = None
 DYNAMIC_TOP_N_ENABLED = True
 DYNAMIC_TOP_N_STRONG_MARKET_DIFF = 500
@@ -45,6 +47,18 @@ ENTRY_DAY_LOW_FROM_OPEN_RISK_EXIT = -0.05
 DEFAULT_INDUSTRY_FILTER_ENABLED = False
 INDUSTRY_CHANGE_MIN = 0.0
 PREV_BODY_MIN = 0.0
+POSITION_WEIGHT_POLICY_NAME = "中二三均衡_强第三半仓"
+POSITION_WEIGHT_STRONG = (0.25, 0.25, 0.50)
+POSITION_WEIGHT_MIDDLE = (0.10, 0.45, 0.45)
+POSITION_WEIGHT_WEAK = (1.0, 1.0, 1.0)
+EXECUTION_ADVICE_ENABLED = True
+EXECUTION_NORMAL_PREMIUM = 0.005
+EXECUTION_NORMAL_PREMIUM_MAX = 0.01
+EXECUTION_HIGH_PREMIUM = 0.015
+EXECUTION_HIGH_PREMIUM_MAX = 0.02
+EXECUTION_NO_CHASE_PREMIUM = 0.0
+EXECUTION_LOW_DISCOUNT = -0.01
+EXECUTION_LOW_DISCOUNT_MAX = -0.015
 SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业联动探索.py"
 OPEN_SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业开盘联动探索.py"
 PUSHPLUS_URL = "http://www.pushplus.plus/send"
@@ -98,16 +112,29 @@ ARCHIVE_SUMMARY_COLUMNS = [
     "策略金额过滤后",
     "策略竞昨成交比阈值",
     "策略竞昨过滤后",
+    "策略竞价涨幅下限",
+    "策略竞价涨幅上限",
+    "策略竞价涨幅过滤后",
     "策略实体过滤后",
     "策略行业过滤启用",
     "策略行业过滤后",
     "策略未匹配占比阈值",
     "策略未匹配过滤后",
+    "策略仓位规则",
+    "策略仓位市场分层",
     "策略最终候选数",
     "策略入选数",
     "策略说明",
     "是否进入策略候选池",
     "是否入选",
+    "建议动作",
+    "建议权重",
+    "挂单建议",
+    "建议挂单溢价",
+    "挂单上限溢价",
+    "挂单建议理由",
+    "仓位规则",
+    "仓位市场分层",
     "策略排序名次",
 ]
 
@@ -145,6 +172,109 @@ def resolve_effective_top_n(
     return min(configured_top_n, DYNAMIC_TOP_N_WEAK_MARKET_TOP_N)
 
 
+def resolve_market_layer(snapshot: dict[str, Any]) -> str:
+    market_diff = pd.to_numeric(pd.Series([snapshot.get("市场20日高低差")]), errors="coerce").iloc[0]
+    if pd.notna(market_diff) and float(market_diff) >= DYNAMIC_TOP_N_STRONG_MARKET_DIFF:
+        return "强"
+    if pd.notna(market_diff) and float(market_diff) >= DYNAMIC_TOP_N_MIDDLE_MARKET_DIFF:
+        return "中"
+    return "弱"
+
+
+def normalize_weight_curve(curve: tuple[float, ...], selected_count: int) -> list[float]:
+    if selected_count <= 0:
+        return []
+    weights = list(curve[:selected_count])
+    if len(weights) < selected_count:
+        weights.extend([0.0] * (selected_count - len(weights)))
+    clipped = [max(0.0, float(weight)) for weight in weights]
+    total = sum(clipped)
+    if total <= 0:
+        return [1.0 / selected_count for _ in range(selected_count)]
+    return [weight / total for weight in clipped]
+
+
+def resolve_position_weights(snapshot: dict[str, Any], selected_count: int) -> tuple[str, list[float]]:
+    layer = resolve_market_layer(snapshot)
+    if layer == "强":
+        curve = POSITION_WEIGHT_STRONG
+    elif layer == "中":
+        curve = POSITION_WEIGHT_MIDDLE
+    else:
+        curve = POSITION_WEIGHT_WEAK
+    return layer, normalize_weight_curve(curve, selected_count)
+
+
+def numeric_value(value: Any) -> float:
+    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    return float(number) if pd.notna(number) else float("nan")
+
+
+def build_execution_advice(row: pd.Series, market_layer: str) -> dict[str, Any]:
+    rank = numeric_value(row.get("排序名次"))
+    auction_change = numeric_value(row.get("竞价涨幅今日"))
+    auction_ratio = numeric_value(row.get("竞昨成交比"))
+
+    reasons: list[str] = []
+    high_signal = False
+    no_chase = False
+
+    if market_layer == "中" and not pd.isna(auction_change) and auction_change < 0:
+        return {
+            "挂单建议": "挂低",
+            "建议挂单溢价": EXECUTION_LOW_DISCOUNT,
+            "挂单上限溢价": EXECUTION_LOW_DISCOUNT_MAX,
+            "挂单建议理由": "中市场负竞价，回测挂低1%更容易改善成本且不降低成交率",
+        }
+
+    if not pd.isna(auction_change) and auction_change > 5:
+        no_chase = True
+        reasons.append("竞价涨幅>5%，避免高位追价")
+    if not pd.isna(auction_change) and auction_change <= -3:
+        no_chase = True
+        reasons.append("竞价涨幅<=-3%，通常有回踩，先等价格")
+    if not pd.isna(auction_ratio) and auction_ratio >= 0.030 and not pd.isna(auction_change) and auction_change < 0:
+        no_chase = True
+        reasons.append("竞昨成交比较高但竞价为负，先避免追高")
+
+    if not no_chase:
+        if (
+            not pd.isna(auction_change)
+            and 0 <= auction_change <= 2
+            and not pd.isna(auction_ratio)
+            and auction_ratio <= 0.030
+        ):
+            high_signal = True
+            reasons.append("竞价涨幅0~2%且竞昨<=0.030，历史更容易开盘不给回踩")
+        if not pd.isna(rank) and rank >= 2 and not pd.isna(auction_change) and 0 <= auction_change <= 5:
+            high_signal = True
+            reasons.append("非TOP1但竞价不弱，历史开盘即最低占比较高")
+        if market_layer == "强" and not pd.isna(auction_change) and -2 <= auction_change <= 2:
+            high_signal = True
+            reasons.append("强市场且竞价温和，适合提高成交优先级")
+
+    if no_chase:
+        return {
+            "挂单建议": "不追",
+            "建议挂单溢价": EXECUTION_NO_CHASE_PREMIUM,
+            "挂单上限溢价": EXECUTION_NORMAL_PREMIUM,
+            "挂单建议理由": "；".join(reasons) or "信号不适合追价",
+        }
+    if high_signal:
+        return {
+            "挂单建议": "挂高",
+            "建议挂单溢价": EXECUTION_HIGH_PREMIUM,
+            "挂单上限溢价": EXECUTION_HIGH_PREMIUM_MAX,
+            "挂单建议理由": "；".join(reasons),
+        }
+    return {
+        "挂单建议": "普通",
+        "建议挂单溢价": EXECUTION_NORMAL_PREMIUM,
+        "挂单上限溢价": EXECUTION_NORMAL_PREMIUM_MAX,
+        "挂单建议理由": "常规信号，优先控制滑点",
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="9:25 后生成今日操作清单")
     parser.add_argument(
@@ -176,6 +306,23 @@ def parse_args() -> argparse.Namespace:
         help="关闭竞昨成交比过滤，仅用于回放对照",
     )
     parser.add_argument(
+        "--min-auction-change",
+        type=float,
+        default=MIN_AUCTION_CHANGE,
+        help="竞价涨幅最低阈值，默认 -8；与 --max-auction-change 组成增强版过滤",
+    )
+    parser.add_argument(
+        "--max-auction-change",
+        type=float,
+        default=MAX_AUCTION_CHANGE,
+        help="竞价涨幅最高阈值，默认 6；与 --min-auction-change 组成增强版过滤",
+    )
+    parser.add_argument(
+        "--no-auction-change-filter",
+        action="store_true",
+        help="关闭竞价涨幅 -8 到 6 过滤，仅用于回放对照旧策略",
+    )
+    parser.add_argument(
         "--min-unmatched-ratio",
         type=float,
         default=DEFAULT_MIN_UNMATCHED_RATIO,
@@ -194,6 +341,11 @@ def parse_args() -> argparse.Namespace:
         dest="industry_filter",
         action="store_false",
         help="关闭申万一级行业涨幅过滤，当前默认",
+    )
+    parser.add_argument(
+        "--no-execution-advice",
+        action="store_true",
+        help="不输出挂单建议列，仅保留选股和仓位结果",
     )
     return parser.parse_args()
 
@@ -588,11 +740,16 @@ def build_archive_record_frame(
     out["策略金额过滤后"] = status.get("金额过滤后")
     out["策略竞昨成交比阈值"] = status.get("竞昨成交比阈值")
     out["策略竞昨过滤后"] = status.get("竞昨过滤后")
+    out["策略竞价涨幅下限"] = status.get("竞价涨幅下限")
+    out["策略竞价涨幅上限"] = status.get("竞价涨幅上限")
+    out["策略竞价涨幅过滤后"] = status.get("竞价涨幅过滤后")
     out["策略实体过滤后"] = status.get("实体过滤后")
     out["策略行业过滤启用"] = status.get("行业过滤启用")
     out["策略行业过滤后"] = status.get("行业过滤后")
     out["策略未匹配占比阈值"] = status.get("未匹配占比阈值")
     out["策略未匹配过滤后"] = status.get("未匹配过滤后")
+    out["策略仓位规则"] = status.get("仓位规则")
+    out["策略仓位市场分层"] = status.get("仓位市场分层")
     out["策略最终候选数"] = status.get("最终候选数")
     out["策略入选数"] = status.get("入选数")
     out["策略说明"] = status.get("结果说明")
@@ -603,8 +760,56 @@ def build_archive_record_frame(
         else {}
     )
     selected_codes = set(selected_df["基础代码"]) if "基础代码" in selected_df.columns else set()
+    selected_actions = (
+        selected_df.set_index("基础代码")["建议动作"].to_dict()
+        if not selected_df.empty and {"基础代码", "建议动作"}.issubset(selected_df.columns)
+        else {}
+    )
+    selected_weights = (
+        selected_df.set_index("基础代码")["建议权重"].to_dict()
+        if not selected_df.empty and {"基础代码", "建议权重"}.issubset(selected_df.columns)
+        else {}
+    )
+    selected_execution_advice = (
+        selected_df.set_index("基础代码")["挂单建议"].to_dict()
+        if not selected_df.empty and {"基础代码", "挂单建议"}.issubset(selected_df.columns)
+        else {}
+    )
+    selected_execution_premium = (
+        selected_df.set_index("基础代码")["建议挂单溢价"].to_dict()
+        if not selected_df.empty and {"基础代码", "建议挂单溢价"}.issubset(selected_df.columns)
+        else {}
+    )
+    selected_execution_premium_max = (
+        selected_df.set_index("基础代码")["挂单上限溢价"].to_dict()
+        if not selected_df.empty and {"基础代码", "挂单上限溢价"}.issubset(selected_df.columns)
+        else {}
+    )
+    selected_execution_reason = (
+        selected_df.set_index("基础代码")["挂单建议理由"].to_dict()
+        if not selected_df.empty and {"基础代码", "挂单建议理由"}.issubset(selected_df.columns)
+        else {}
+    )
+    selected_weight_rules = (
+        selected_df.set_index("基础代码")["仓位规则"].to_dict()
+        if not selected_df.empty and {"基础代码", "仓位规则"}.issubset(selected_df.columns)
+        else {}
+    )
+    selected_weight_layers = (
+        selected_df.set_index("基础代码")["仓位市场分层"].to_dict()
+        if not selected_df.empty and {"基础代码", "仓位市场分层"}.issubset(selected_df.columns)
+        else {}
+    )
     out["是否进入策略候选池"] = out["基础代码"].isin(filtered_rank.keys())
     out["是否入选"] = out["基础代码"].isin(selected_codes)
+    out["建议动作"] = out["基础代码"].map(selected_actions)
+    out["建议权重"] = out["基础代码"].map(selected_weights)
+    out["挂单建议"] = out["基础代码"].map(selected_execution_advice)
+    out["建议挂单溢价"] = out["基础代码"].map(selected_execution_premium)
+    out["挂单上限溢价"] = out["基础代码"].map(selected_execution_premium_max)
+    out["挂单建议理由"] = out["基础代码"].map(selected_execution_reason)
+    out["仓位规则"] = out["基础代码"].map(selected_weight_rules)
+    out["仓位市场分层"] = out["基础代码"].map(selected_weight_layers)
     out["策略排序名次"] = out["基础代码"].map(filtered_rank)
     return out
 
@@ -708,6 +913,10 @@ def archive_daily_data(
             "entry_day_low_from_open_risk_exit": status.get("盘后弱承接风控阈值", ENTRY_DAY_LOW_FROM_OPEN_RISK_EXIT),
             "industry_filter_enabled": status.get("行业过滤启用", DEFAULT_INDUSTRY_FILTER_ENABLED),
             "industry_change_min": INDUSTRY_CHANGE_MIN,
+            "min_auction_change": status.get("竞价涨幅下限"),
+            "max_auction_change": status.get("竞价涨幅上限"),
+            "position_weight_policy": status.get("仓位规则", POSITION_WEIGHT_POLICY_NAME),
+            "position_weight_layer": status.get("仓位市场分层"),
             "min_unmatched_ratio": status.get("未匹配占比阈值"),
             "prev_body_min": PREV_BODY_MIN,
             "sector_source": sector_source,
@@ -884,6 +1093,9 @@ def apply_strategy(
     industry_filter_enabled: bool = DEFAULT_INDUSTRY_FILTER_ENABLED,
     min_unmatched_ratio: float | None = DEFAULT_MIN_UNMATCHED_RATIO,
     dynamic_top_n_enabled: bool = DYNAMIC_TOP_N_ENABLED,
+    min_auction_change: float | None = MIN_AUCTION_CHANGE,
+    max_auction_change: float | None = MAX_AUCTION_CHANGE,
+    execution_advice_enabled: bool = EXECUTION_ADVICE_ENABLED,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     if top_n < 1:
         raise ValueError("top_n 必须大于等于 1")
@@ -898,19 +1110,25 @@ def apply_strategy(
         "行业涨幅阈值": INDUSTRY_CHANGE_MIN,
         "前日实体阈值": PREV_BODY_MIN,
         "竞昨成交比阈值": min_auction_ratio,
+        "竞价涨幅下限": min_auction_change,
+        "竞价涨幅上限": max_auction_change,
         "未匹配占比阈值": min_unmatched_ratio,
+        "仓位规则": POSITION_WEIGHT_POLICY_NAME,
+        "仓位市场分层": resolve_market_layer(snapshot),
         "配置最大入选数": top_n,
         "最大入选数": effective_top_n,
         "动态持仓启用": dynamic_top_n_enabled,
         "动态持仓强市场阈值": DYNAMIC_TOP_N_STRONG_MARKET_DIFF,
         "动态持仓中市场阈值": DYNAMIC_TOP_N_MIDDLE_MARKET_DIFF,
         "盘后弱承接风控阈值": ENTRY_DAY_LOW_FROM_OPEN_RISK_EXIT,
+        "挂单建议启用": execution_advice_enabled,
         "原始候选数": int(len(df)),
     }
 
     if snapshot.get("开仓开关") != "通过":
         status["金额过滤后"] = 0
         status["竞昨过滤后"] = 0
+        status["竞价涨幅过滤后"] = 0
         status["实体过滤后"] = 0
         status["行业过滤后"] = 0
         status["未匹配过滤后"] = 0
@@ -928,6 +1146,17 @@ def apply_strategy(
         auction_ratio = pd.to_numeric(filtered["竞昨成交比"], errors="coerce")
         filtered = filtered[auction_ratio >= min_auction_ratio].copy()
     status["竞昨过滤后"] = int(len(filtered))
+    if min_auction_change is not None or max_auction_change is not None:
+        if "竞价涨幅今日" not in filtered.columns:
+            raise RuntimeError("缺少竞价涨幅今日，无法执行竞价涨幅过滤")
+        auction_change = pd.to_numeric(filtered["竞价涨幅今日"], errors="coerce")
+        auction_change_mask = auction_change.notna()
+        if min_auction_change is not None:
+            auction_change_mask &= auction_change >= min_auction_change
+        if max_auction_change is not None:
+            auction_change_mask &= auction_change <= max_auction_change
+        filtered = filtered[auction_change_mask].copy()
+    status["竞价涨幅过滤后"] = int(len(filtered))
     yesterday_body = pd.to_numeric(filtered["实体涨跌幅昨日"], errors="coerce")
     prev_body = pd.to_numeric(filtered["实体涨跌幅前日"], errors="coerce")
     filtered = filtered[(yesterday_body < prev_body) & (prev_body >= PREV_BODY_MIN)].copy()
@@ -951,8 +1180,16 @@ def apply_strategy(
     filtered["排序名次"] = range(1, len(filtered) + 1)
     selected = filtered.head(effective_top_n).copy()
     if not selected.empty:
-        selected["建议动作"] = "开盘等权买入"
-        selected["建议权重"] = round(1 / len(selected), 4)
+        weight_layer, weights = resolve_position_weights(snapshot, len(selected))
+        status["仓位市场分层"] = weight_layer
+        selected["建议动作"] = "开盘按建议权重买入"
+        selected["建议权重"] = [round(weight, 4) for weight in weights]
+        selected["仓位规则"] = POSITION_WEIGHT_POLICY_NAME
+        selected["仓位市场分层"] = weight_layer
+        if execution_advice_enabled:
+            advice_records = [build_execution_advice(row, weight_layer) for _, row in selected.iterrows()]
+            for column in ["挂单建议", "建议挂单溢价", "挂单上限溢价", "挂单建议理由"]:
+                selected[column] = [record[column] for record in advice_records]
     status["最终候选数"] = int(len(filtered))
     status["入选数"] = int(len(selected))
     status["结果说明"] = "市场开关通过" if not selected.empty else "市场开关通过，但无符合条件标的"
@@ -966,6 +1203,18 @@ def format_ratio_threshold(value: Any) -> str:
     if pd.isna(number):
         return "-"
     return f">={float(number):.4f}"
+
+
+def format_change_filter(min_value: Any, max_value: Any) -> str:
+    min_number = pd.to_numeric(min_value, errors="coerce")
+    max_number = pd.to_numeric(max_value, errors="coerce")
+    if pd.isna(min_number) and pd.isna(max_number):
+        return "关闭"
+    if pd.isna(min_number):
+        return f"<={float(max_number):g}"
+    if pd.isna(max_number):
+        return f">={float(min_number):g}"
+    return f"{float(min_number):g} 到 {float(max_number):g}"
 
 
 def format_percent(value: Any) -> str:
@@ -1020,7 +1269,12 @@ def export_outputs(
         "昨日前日成交量比",
     ]
     keep_candidate = [column for column in candidate_columns if column in export_filtered.columns]
-    keep_selected = [column for column in candidate_columns + ["建议动作", "建议权重"] if column in export_selected.columns]
+    keep_selected = [
+        column
+        for column in candidate_columns
+        + ["建议动作", "建议权重", "挂单建议", "建议挂单溢价", "挂单上限溢价", "挂单建议理由", "仓位规则", "仓位市场分层"]
+        if column in export_selected.columns
+    ]
 
     latest_csv = OUTPUT_PREFIX.with_suffix(".csv")
     dated_csv = BASE_DIR / f"今日操作清单-{date_text}.csv"
@@ -1053,7 +1307,10 @@ def export_outputs(
         f"- 行业涨幅阈值: `>{status.get('行业涨幅阈值')}`",
         f"- 前日实体阈值: `>={status.get('前日实体阈值')}`",
         f"- 竞昨成交比阈值: `{format_ratio_threshold(status.get('竞昨成交比阈值'))}`",
+        f"- 竞价涨幅过滤: `{format_change_filter(status.get('竞价涨幅下限'), status.get('竞价涨幅上限'))}`",
         f"- 未匹配占比阈值: `{format_ratio_threshold(status.get('未匹配占比阈值'))}`",
+        f"- 仓位规则: `{status.get('仓位规则')}` / `{status.get('仓位市场分层')}市场`",
+        f"- 挂单建议: `{'启用' if status.get('挂单建议启用') else '关闭'}`",
         f"- 动态持仓: `{'启用' if status.get('动态持仓启用') else '关闭'}`",
         f"- 动态持仓档位: `>={status.get('动态持仓强市场阈值')}取TOP3，>={status.get('动态持仓中市场阈值')}取TOP2，否则TOP1`",
         f"- 配置最大入选数: `{status.get('配置最大入选数', TOP_N)}`",
@@ -1062,6 +1319,7 @@ def export_outputs(
         f"- 原始候选数: `{status.get('原始候选数')}`",
         f"- 金额过滤后: `{status.get('金额过滤后', 0)}`",
         f"- 竞昨过滤后: `{status.get('竞昨过滤后', 0)}`",
+        f"- 竞价涨幅过滤后: `{status.get('竞价涨幅过滤后', 0)}`",
         f"- 实体过滤后: `{status.get('实体过滤后', 0)}`",
         f"- 行业过滤后: `{status.get('行业过滤后', 0)}`",
         f"- 未匹配过滤后: `{status.get('未匹配过滤后', 0)}`",
@@ -1076,8 +1334,8 @@ def export_outputs(
     else:
         lines.extend(
             [
-                "| 排名 | 股票代码 | 股票简称 | 一级行业 | 行业涨幅 | 行业涨幅排名 | 竞价金额 | 未匹配占比 | 竞昨成交比 | 热度排名昨日 | 建议动作 |",
-                "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+                "| 排名 | 股票代码 | 股票简称 | 一级行业 | 行业涨幅 | 行业涨幅排名 | 竞价金额 | 未匹配占比 | 竞昨成交比 | 热度排名昨日 | 建议权重 | 建议动作 | 挂单建议 | 建议溢价 | 上限溢价 | 挂单理由 |",
+                "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | --- |",
             ]
         )
         for _, row in export_selected.iterrows():
@@ -1086,7 +1344,9 @@ def export_outputs(
                 f"{row.get('申万一级行业', '')} | {row.get('申万一级行业涨跌幅', float('nan')):.4f} | "
                 f"{row.get('申万一级行业涨跌幅排名', float('nan')):.0f} | "
                 f"{row['竞价匹配金额_openapi']:.0f} | {row.get('竞价未匹配占比', float('nan')):.4f} | {row['竞昨成交比']:.4f} | "
-                f"{row['个股热度排名昨日']:.0f} | {row['建议动作']} |"
+                f"{row['个股热度排名昨日']:.0f} | {row.get('建议权重', float('nan')):.4f} | {row['建议动作']} | "
+                f"{row.get('挂单建议', '-')} | {format_percent(row.get('建议挂单溢价'))} | {format_percent(row.get('挂单上限溢价'))} | "
+                f"{row.get('挂单建议理由', '')} |"
             )
 
     lines.extend(
@@ -1129,10 +1389,13 @@ def build_pushplus_content(trade_date: pd.Timestamp, selected_df: pd.DataFrame, 
         f"行业口径: {status.get('行业强度口径')}",
         f"行业过滤: {'启用' if status.get('行业过滤启用') else '关闭'}",
         f"竞昨成交比阈值: {format_ratio_threshold(status.get('竞昨成交比阈值'))}",
+        f"竞价涨幅过滤: {format_change_filter(status.get('竞价涨幅下限'), status.get('竞价涨幅上限'))}",
         f"未匹配占比阈值: {format_ratio_threshold(status.get('未匹配占比阈值'))}",
+        f"仓位规则: {status.get('仓位规则')} / {status.get('仓位市场分层')}市场",
+        f"挂单建议: {'启用' if status.get('挂单建议启用') else '关闭'}",
         f"动态持仓: {'启用' if status.get('动态持仓启用') else '关闭'} / 配置TOP{status.get('配置最大入选数', TOP_N)} -> 今日TOP{status.get('最大入选数', TOP_N)}",
         build_risk_exit_note(status),
-        f"过滤: 原始{status.get('原始候选数', 0)} -> 金额{status.get('金额过滤后', 0)} -> 竞昨{status.get('竞昨过滤后', 0)} -> 实体{status.get('实体过滤后', 0)} -> 行业{status.get('行业过滤后', 0)} -> 未匹配{status.get('未匹配过滤后', 0)} -> 入选{status.get('入选数', 0)}",
+        f"过滤: 原始{status.get('原始候选数', 0)} -> 金额{status.get('金额过滤后', 0)} -> 竞昨{status.get('竞昨过滤后', 0)} -> 竞价涨幅{status.get('竞价涨幅过滤后', 0)} -> 实体{status.get('实体过滤后', 0)} -> 行业{status.get('行业过滤后', 0)} -> 未匹配{status.get('未匹配过滤后', 0)} -> 入选{status.get('入选数', 0)}",
         f"说明: {status.get('结果说明')}",
         "",
     ]
@@ -1152,6 +1415,8 @@ def build_pushplus_content(trade_date: pd.Timestamp, selected_df: pd.DataFrame, 
                 f"未匹配占比: {format_push_number(row.get('竞价未匹配占比'), 4)}",
                 f"竞昨成交比: {format_push_number(row.get('竞昨成交比'), 4)}",
                 f"昨日热度排名: {format_push_number(row.get('个股热度排名昨日'), 0)}",
+                f"挂单建议: {row.get('挂单建议', '-')} / 建议溢价{format_percent(row.get('建议挂单溢价'))} / 上限{format_percent(row.get('挂单上限溢价'))}",
+                f"挂单理由: {row.get('挂单建议理由', '-')}",
                 "",
             ]
         )
@@ -1228,6 +1493,8 @@ def main() -> None:
     merged = compute_factors(merged)
     merged, sector_df, sector_source = attach_sector_context(merged, today_ts, historical_replay)
     min_auction_ratio = None if args.no_auction_ratio_filter else args.min_auction_ratio
+    min_auction_change = None if args.no_auction_change_filter else args.min_auction_change
+    max_auction_change = None if args.no_auction_change_filter else args.max_auction_change
     filtered, selected, status = apply_strategy(
         merged,
         snapshot,
@@ -1238,6 +1505,9 @@ def main() -> None:
         args.industry_filter,
         args.min_unmatched_ratio,
         not args.fixed_top_n,
+        min_auction_change,
+        max_auction_change,
+        not args.no_execution_advice,
     )
     export_outputs(today_ts, filtered, selected, status, queries)
     archive_dir = archive_daily_data(
@@ -1264,11 +1534,12 @@ def main() -> None:
         push_content = build_pushplus_content(today_ts, selected, status)
         send_pushplus(push_title, push_content)
     logging.info(
-        "运行成功 trade_date=%s raw=%s amount=%s auction_ratio=%s body=%s industry=%s unmatched=%s selected=%s",
+        "运行成功 trade_date=%s raw=%s amount=%s auction_ratio=%s auction_change=%s body=%s industry=%s unmatched=%s selected=%s",
         status.get("交易日期"),
         status.get("原始候选数"),
         status.get("金额过滤后"),
         status.get("竞昨过滤后"),
+        status.get("竞价涨幅过滤后"),
         status.get("实体过滤后"),
         status.get("行业过滤后"),
         status.get("未匹配过滤后"),
@@ -1283,7 +1554,10 @@ def main() -> None:
         f"阈值=涨幅>{status['行业涨幅阈值']}"
     )
     print(f"竞昨成交比阈值: {format_ratio_threshold(status.get('竞昨成交比阈值'))}")
+    print(f"竞价涨幅过滤: {format_change_filter(status.get('竞价涨幅下限'), status.get('竞价涨幅上限'))}")
     print(f"未匹配占比阈值: {format_ratio_threshold(status.get('未匹配占比阈值'))}")
+    print(f"仓位规则: {status.get('仓位规则')} / {status.get('仓位市场分层')}市场")
+    print(f"挂单建议: {'启用' if status.get('挂单建议启用') else '关闭'}")
     print(
         f"动态持仓: {'启用' if status.get('动态持仓启用') else '关闭'} / "
         f">={status.get('动态持仓强市场阈值')}取TOP3 / "
@@ -1295,6 +1569,7 @@ def main() -> None:
     print(f"原始候选数: {status['原始候选数']}")
     print(f"金额过滤后: {status['金额过滤后']}")
     print(f"竞昨过滤后: {status['竞昨过滤后']}")
+    print(f"竞价涨幅过滤后: {status['竞价涨幅过滤后']}")
     print(f"实体过滤后: {status['实体过滤后']}")
     print(f"行业过滤后: {status['行业过滤后']}")
     print(f"未匹配过滤后: {status['未匹配过滤后']}")
@@ -1317,6 +1592,10 @@ def main() -> None:
                     "竞价未匹配占比",
                     "竞昨成交比",
                     "个股热度排名昨日",
+                    "建议权重",
+                    "挂单建议",
+                    "建议挂单溢价",
+                    "挂单上限溢价",
                 ]
             ].to_string(index=False)
         )
