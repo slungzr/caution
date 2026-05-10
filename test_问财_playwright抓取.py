@@ -20,8 +20,9 @@ class WencaiPlaywrightFetchTests(unittest.TestCase):
         captured: dict[str, object] = {}
 
         class FakeStrategy:
-            TOP_N = 3
+            TOP_N = 2
             MIN_AUCTION_TO_YESTERDAY_RATIO = 0.022
+            DYNAMIC_TOP_N_ENABLED = False
             DEFAULT_MIN_UNMATCHED_RATIO = None
             DEFAULT_INDUSTRY_FILTER_ENABLED = False
 
@@ -86,8 +87,9 @@ class WencaiPlaywrightFetchTests(unittest.TestCase):
         captured: dict[str, object] = {}
 
         class FakeStrategy:
-            TOP_N = 3
+            TOP_N = 2
             MIN_AUCTION_TO_YESTERDAY_RATIO = 0.022
+            DYNAMIC_TOP_N_ENABLED = False
             DEFAULT_MIN_UNMATCHED_RATIO = None
             DEFAULT_INDUSTRY_FILTER_ENABLED = False
 
@@ -115,7 +117,7 @@ class WencaiPlaywrightFetchTests(unittest.TestCase):
                     push=False,
                     no_push=True,
                     top_n=None,
-                    fixed_top_n=False,
+                    fixed_top_n=None,
                     min_auction_ratio=None,
                     no_auction_ratio_filter=False,
                     min_unmatched_ratio=None,
@@ -133,7 +135,8 @@ class WencaiPlaywrightFetchTests(unittest.TestCase):
             wencai_playwright_fetch.load_strategy_module = original_load_strategy
             wencai_playwright_fetch.WencaiPlaywrightClient = original_client
 
-        self.assertEqual(captured["top_n"], 3)
+        self.assertEqual(captured["top_n"], 2)
+        self.assertTrue(captured["fixed_top_n"])
         self.assertEqual(captured["min_auction_ratio"], 0.022)
         self.assertIsNone(captured["min_unmatched_ratio"])
         self.assertFalse(captured["industry_filter"])

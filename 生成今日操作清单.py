@@ -32,13 +32,13 @@ MARKET_WIDTH_SCRIPT = BASE_DIR / "获取市场宽度.py"
 OUTPUT_PREFIX = BASE_DIR / "今日操作清单"
 DATA_ARCHIVE_DIR = BASE_DIR / "daily_data" / "竞价爬升"
 ARCHIVE_SUMMARY_CSV = DATA_ARCHIVE_DIR / "竞价爬升-每日采集汇总.csv"
-TOP_N = 3
+TOP_N = 2
 MIN_AUCTION_AMOUNT = 50_000_000
 MIN_AUCTION_TO_YESTERDAY_RATIO = 0.022
-MIN_AUCTION_CHANGE = -8.0
+MIN_AUCTION_CHANGE = -9.0
 MAX_AUCTION_CHANGE = 6.0
 DEFAULT_MIN_UNMATCHED_RATIO: float | None = None
-DYNAMIC_TOP_N_ENABLED = True
+DYNAMIC_TOP_N_ENABLED = False
 DYNAMIC_TOP_N_STRONG_MARKET_DIFF = 500
 DYNAMIC_TOP_N_MIDDLE_MARKET_DIFF = 100
 DYNAMIC_TOP_N_MIDDLE_MARKET_TOP_N = 2
@@ -47,9 +47,9 @@ ENTRY_DAY_LOW_FROM_OPEN_RISK_EXIT = -0.05
 DEFAULT_INDUSTRY_FILTER_ENABLED = False
 INDUSTRY_CHANGE_MIN = 0.0
 PREV_BODY_MIN = 0.0
-POSITION_WEIGHT_POLICY_NAME = "中二三均衡_强第三半仓"
-POSITION_WEIGHT_STRONG = (0.25, 0.25, 0.50)
-POSITION_WEIGHT_MIDDLE = (0.10, 0.45, 0.45)
+POSITION_WEIGHT_POLICY_NAME = "固定TOP2_等权"
+POSITION_WEIGHT_STRONG = (1.0, 1.0, 1.0)
+POSITION_WEIGHT_MIDDLE = (1.0, 1.0, 1.0)
 POSITION_WEIGHT_WEAK = (1.0, 1.0, 1.0)
 EXECUTION_ADVICE_ENABLED = True
 EXECUTION_NORMAL_PREMIUM = 0.005
@@ -312,12 +312,21 @@ def parse_args() -> argparse.Namespace:
         "--top-n",
         type=positive_int,
         default=TOP_N,
-        help="配置最大入选标的数量，默认 3；动态持仓开启时按市场强弱自动降到 2 或 1",
+        help="配置最大入选标的数量，默认 2；动态持仓开启时按市场强弱自动降到 2 或 1",
     )
-    parser.add_argument(
+    top_mode_group = parser.add_mutually_exclusive_group()
+    top_mode_group.add_argument(
         "--fixed-top-n",
+        dest="fixed_top_n",
         action="store_true",
+        default=not DYNAMIC_TOP_N_ENABLED,
         help="关闭动态持仓，严格使用 --top-n 指定的最大入选数",
+    )
+    top_mode_group.add_argument(
+        "--dynamic-top-n",
+        dest="fixed_top_n",
+        action="store_false",
+        help="启用动态持仓，按市场强弱自动降低入选数",
     )
     parser.add_argument(
         "--min-auction-ratio",
@@ -334,7 +343,7 @@ def parse_args() -> argparse.Namespace:
         "--min-auction-change",
         type=float,
         default=MIN_AUCTION_CHANGE,
-        help="竞价涨幅最低阈值，默认 -8；与 --max-auction-change 组成增强版过滤",
+        help="竞价涨幅最低阈值，默认 -9；与 --max-auction-change 组成增强版过滤",
     )
     parser.add_argument(
         "--max-auction-change",
@@ -345,7 +354,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-auction-change-filter",
         action="store_true",
-        help="关闭竞价涨幅 -8 到 6 过滤，仅用于回放对照旧策略",
+        help="关闭竞价涨幅 -9 到 6 过滤，仅用于回放对照旧策略",
     )
     parser.add_argument(
         "--min-unmatched-ratio",
@@ -1213,8 +1222,8 @@ def apply_strategy(
         filtered = filtered[unmatched_ratio >= min_unmatched_ratio].copy()
     status["未匹配过滤后"] = int(len(filtered))
     filtered = filtered.sort_values(
-        ["竞价未匹配占比", "竞昨成交比", "个股热度排名昨日", "基础代码"],
-        ascending=[False, False, True, True],
+        ["竞价涨幅今日", "竞昨成交比", "个股热度排名昨日", "基础代码"],
+        ascending=[True, False, True, True],
         kind="stable",
     ).reset_index(drop=True)
     filtered["排序名次"] = range(1, len(filtered) + 1)

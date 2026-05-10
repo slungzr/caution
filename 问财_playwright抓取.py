@@ -566,7 +566,11 @@ def run_strategy(args: argparse.Namespace) -> int:
         push=args.push,
         no_push=args.no_push,
         top_n=args.top_n if args.top_n is not None else strategy.TOP_N,
-        fixed_top_n=args.fixed_top_n,
+        fixed_top_n=(
+            args.fixed_top_n
+            if args.fixed_top_n is not None
+            else not getattr(strategy, "DYNAMIC_TOP_N_ENABLED", True)
+        ),
         min_auction_ratio=(
             args.min_auction_ratio
             if args.min_auction_ratio is not None
@@ -627,7 +631,20 @@ def main() -> int:
     parser.add_argument("--push", action="store_true", help="策略模式下允许历史回放推送")
     parser.add_argument("--no-push", action="store_true", help="策略模式下不发送 PushPlus")
     parser.add_argument("--top-n", type=int, default=None, help="策略模式下传给生成今日操作清单.py 的最大入选数")
-    parser.add_argument("--fixed-top-n", action="store_true", help="策略模式下关闭动态持仓，严格使用 --top-n")
+    top_mode_group = parser.add_mutually_exclusive_group()
+    top_mode_group.add_argument(
+        "--fixed-top-n",
+        dest="fixed_top_n",
+        action="store_true",
+        default=None,
+        help="策略模式下关闭动态持仓，严格使用 --top-n",
+    )
+    top_mode_group.add_argument(
+        "--dynamic-top-n",
+        dest="fixed_top_n",
+        action="store_false",
+        help="策略模式下启用动态持仓，按市场强弱自动降低入选数",
+    )
     parser.add_argument("--min-auction-ratio", type=float, default=None, help="策略模式下竞昨成交比最低阈值")
     parser.add_argument("--no-auction-ratio-filter", action="store_true", help="策略模式下关闭竞昨成交比过滤")
     parser.add_argument("--min-auction-change", type=float, default=None, help="策略模式下竞价涨幅最低阈值，默认跟随正式脚本")
