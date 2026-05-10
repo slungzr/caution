@@ -59,6 +59,7 @@ EXECUTION_HIGH_PREMIUM_MAX = 0.02
 EXECUTION_NO_CHASE_PREMIUM = 0.0
 EXECUTION_LOW_DISCOUNT = -0.01
 EXECUTION_LOW_DISCOUNT_MAX = -0.015
+YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD = 8.0
 SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业联动探索.py"
 OPEN_SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业开盘联动探索.py"
 PUSHPLUS_URL = "http://www.pushplus.plus/send"
@@ -94,6 +95,8 @@ ARCHIVE_SUMMARY_COLUMNS = [
     "竞昨成交比估算",
     "竞昨成交比",
     "昨日前日成交量比",
+    "昨日前日量比风险",
+    "昨日前日量比提示",
     "申万一级行业代码",
     "申万一级行业",
     "申万一级行业涨跌幅",
@@ -120,6 +123,7 @@ ARCHIVE_SUMMARY_COLUMNS = [
     "策略行业过滤后",
     "策略未匹配占比阈值",
     "策略未匹配过滤后",
+    "策略昨日前日量比风险阈值",
     "策略仓位规则",
     "策略仓位市场分层",
     "策略最终候选数",
@@ -208,6 +212,27 @@ def resolve_position_weights(snapshot: dict[str, Any], selected_count: int) -> t
 def numeric_value(value: Any) -> float:
     number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     return float(number) if pd.notna(number) else float("nan")
+
+
+def build_volume_ratio_risk(row: pd.Series) -> dict[str, str]:
+    volume_ratio = numeric_value(row.get("昨日前日成交量比"))
+    if pd.isna(volume_ratio):
+        return {
+            "昨日前日量比风险": "未知",
+            "昨日前日量比提示": "缺少昨日前日成交量比，无法判断极端放量风险",
+        }
+    if volume_ratio > YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD:
+        return {
+            "昨日前日量比风险": "谨慎",
+            "昨日前日量比提示": (
+                f"昨日前日成交量比{volume_ratio:.2f}>{YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD:.1f}，"
+                "昨日极端放量，回测中类似样本有接力失败风险；建议观察或降低执行优先级"
+            ),
+        }
+    return {
+        "昨日前日量比风险": "正常",
+        "昨日前日量比提示": "",
+    }
 
 
 def build_execution_advice(row: pd.Series, market_layer: str) -> dict[str, Any]:
@@ -748,6 +773,7 @@ def build_archive_record_frame(
     out["策略行业过滤后"] = status.get("行业过滤后")
     out["策略未匹配占比阈值"] = status.get("未匹配占比阈值")
     out["策略未匹配过滤后"] = status.get("未匹配过滤后")
+    out["策略昨日前日量比风险阈值"] = status.get("昨日前日量比风险阈值")
     out["策略仓位规则"] = status.get("仓位规则")
     out["策略仓位市场分层"] = status.get("仓位市场分层")
     out["策略最终候选数"] = status.get("最终候选数")
@@ -790,6 +816,16 @@ def build_archive_record_frame(
         if not selected_df.empty and {"基础代码", "挂单建议理由"}.issubset(selected_df.columns)
         else {}
     )
+    candidate_volume_risks = (
+        filtered_df.set_index("基础代码")["昨日前日量比风险"].to_dict()
+        if not filtered_df.empty and {"基础代码", "昨日前日量比风险"}.issubset(filtered_df.columns)
+        else {}
+    )
+    candidate_volume_risk_notes = (
+        filtered_df.set_index("基础代码")["昨日前日量比提示"].to_dict()
+        if not filtered_df.empty and {"基础代码", "昨日前日量比提示"}.issubset(filtered_df.columns)
+        else {}
+    )
     selected_weight_rules = (
         selected_df.set_index("基础代码")["仓位规则"].to_dict()
         if not selected_df.empty and {"基础代码", "仓位规则"}.issubset(selected_df.columns)
@@ -808,6 +844,8 @@ def build_archive_record_frame(
     out["建议挂单溢价"] = out["基础代码"].map(selected_execution_premium)
     out["挂单上限溢价"] = out["基础代码"].map(selected_execution_premium_max)
     out["挂单建议理由"] = out["基础代码"].map(selected_execution_reason)
+    out["昨日前日量比风险"] = out["基础代码"].map(candidate_volume_risks)
+    out["昨日前日量比提示"] = out["基础代码"].map(candidate_volume_risk_notes)
     out["仓位规则"] = out["基础代码"].map(selected_weight_rules)
     out["仓位市场分层"] = out["基础代码"].map(selected_weight_layers)
     out["策略排序名次"] = out["基础代码"].map(filtered_rank)
@@ -1122,6 +1160,7 @@ def apply_strategy(
         "动态持仓中市场阈值": DYNAMIC_TOP_N_MIDDLE_MARKET_DIFF,
         "盘后弱承接风控阈值": ENTRY_DAY_LOW_FROM_OPEN_RISK_EXIT,
         "挂单建议启用": execution_advice_enabled,
+        "昨日前日量比风险阈值": YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD,
         "原始候选数": int(len(df)),
     }
 
@@ -1134,6 +1173,7 @@ def apply_strategy(
         status["未匹配过滤后"] = 0
         status["最终候选数"] = 0
         status["入选数"] = 0
+        status["入选量比风险数"] = 0
         status["结果说明"] = "市场开关未通过，今日空仓"
         return df.head(0).copy(), df.head(0).copy(), status
 
@@ -1178,6 +1218,10 @@ def apply_strategy(
         kind="stable",
     ).reset_index(drop=True)
     filtered["排序名次"] = range(1, len(filtered) + 1)
+    if not filtered.empty:
+        risk_records = [build_volume_ratio_risk(row) for _, row in filtered.iterrows()]
+        for column in ["昨日前日量比风险", "昨日前日量比提示"]:
+            filtered[column] = [record[column] for record in risk_records]
     selected = filtered.head(effective_top_n).copy()
     if not selected.empty:
         weight_layer, weights = resolve_position_weights(snapshot, len(selected))
@@ -1192,6 +1236,11 @@ def apply_strategy(
                 selected[column] = [record[column] for record in advice_records]
     status["最终候选数"] = int(len(filtered))
     status["入选数"] = int(len(selected))
+    status["入选量比风险数"] = (
+        int(selected["昨日前日量比风险"].eq("谨慎").sum())
+        if "昨日前日量比风险" in selected.columns
+        else 0
+    )
     status["结果说明"] = "市场开关通过" if not selected.empty else "市场开关通过，但无符合条件标的"
     return filtered, selected, status
 
@@ -1267,6 +1316,8 @@ def export_outputs(
         "连续涨停天数昨日",
         "竞昨成交比",
         "昨日前日成交量比",
+        "昨日前日量比风险",
+        "昨日前日量比提示",
     ]
     keep_candidate = [column for column in candidate_columns if column in export_filtered.columns]
     keep_selected = [
@@ -1309,6 +1360,7 @@ def export_outputs(
         f"- 竞昨成交比阈值: `{format_ratio_threshold(status.get('竞昨成交比阈值'))}`",
         f"- 竞价涨幅过滤: `{format_change_filter(status.get('竞价涨幅下限'), status.get('竞价涨幅上限'))}`",
         f"- 未匹配占比阈值: `{format_ratio_threshold(status.get('未匹配占比阈值'))}`",
+        f"- 昨日前日量比风险提示: `>{status.get('昨日前日量比风险阈值', YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD)} 标记谨慎，不默认剔除` / 入选风险数 `{status.get('入选量比风险数', 0)}`",
         f"- 仓位规则: `{status.get('仓位规则')}` / `{status.get('仓位市场分层')}市场`",
         f"- 挂单建议: `{'启用' if status.get('挂单建议启用') else '关闭'}`",
         f"- 动态持仓: `{'启用' if status.get('动态持仓启用') else '关闭'}`",
@@ -1334,8 +1386,8 @@ def export_outputs(
     else:
         lines.extend(
             [
-                "| 排名 | 股票代码 | 股票简称 | 一级行业 | 行业涨幅 | 行业涨幅排名 | 竞价金额 | 未匹配占比 | 竞昨成交比 | 热度排名昨日 | 建议权重 | 建议动作 | 挂单建议 | 建议溢价 | 上限溢价 | 挂单理由 |",
-                "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | --- |",
+                "| 排名 | 股票代码 | 股票简称 | 一级行业 | 行业涨幅 | 行业涨幅排名 | 竞价金额 | 未匹配占比 | 竞昨成交比 | 昨前量比 | 量比风险 | 热度排名昨日 | 建议权重 | 建议动作 | 挂单建议 | 建议溢价 | 上限溢价 | 挂单理由 |",
+                "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- | --- | ---: | ---: | --- |",
             ]
         )
         for _, row in export_selected.iterrows():
@@ -1344,6 +1396,7 @@ def export_outputs(
                 f"{row.get('申万一级行业', '')} | {row.get('申万一级行业涨跌幅', float('nan')):.4f} | "
                 f"{row.get('申万一级行业涨跌幅排名', float('nan')):.0f} | "
                 f"{row['竞价匹配金额_openapi']:.0f} | {row.get('竞价未匹配占比', float('nan')):.4f} | {row['竞昨成交比']:.4f} | "
+                f"{row.get('昨日前日成交量比', float('nan')):.2f} | {row.get('昨日前日量比风险', '-')} | "
                 f"{row['个股热度排名昨日']:.0f} | {row.get('建议权重', float('nan')):.4f} | {row['建议动作']} | "
                 f"{row.get('挂单建议', '-')} | {format_percent(row.get('建议挂单溢价'))} | {format_percent(row.get('挂单上限溢价'))} | "
                 f"{row.get('挂单建议理由', '')} |"
@@ -1391,6 +1444,7 @@ def build_pushplus_content(trade_date: pd.Timestamp, selected_df: pd.DataFrame, 
         f"竞昨成交比阈值: {format_ratio_threshold(status.get('竞昨成交比阈值'))}",
         f"竞价涨幅过滤: {format_change_filter(status.get('竞价涨幅下限'), status.get('竞价涨幅上限'))}",
         f"未匹配占比阈值: {format_ratio_threshold(status.get('未匹配占比阈值'))}",
+        f"昨日前日量比风险: >{status.get('昨日前日量比风险阈值', YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD)} 标记谨慎，不默认剔除 / 入选风险数{status.get('入选量比风险数', 0)}",
         f"仓位规则: {status.get('仓位规则')} / {status.get('仓位市场分层')}市场",
         f"挂单建议: {'启用' if status.get('挂单建议启用') else '关闭'}",
         f"动态持仓: {'启用' if status.get('动态持仓启用') else '关闭'} / 配置TOP{status.get('配置最大入选数', TOP_N)} -> 今日TOP{status.get('最大入选数', TOP_N)}",
@@ -1414,9 +1468,11 @@ def build_pushplus_content(trade_date: pd.Timestamp, selected_df: pd.DataFrame, 
                 f"竞价金额: {format_push_number(row.get('竞价匹配金额_openapi'), 0)}",
                 f"未匹配占比: {format_push_number(row.get('竞价未匹配占比'), 4)}",
                 f"竞昨成交比: {format_push_number(row.get('竞昨成交比'), 4)}",
+                f"昨日前日量比: {format_push_number(row.get('昨日前日成交量比'), 2)} / 风险: {row.get('昨日前日量比风险', '-')}",
                 f"昨日热度排名: {format_push_number(row.get('个股热度排名昨日'), 0)}",
                 f"挂单建议: {row.get('挂单建议', '-')} / 建议溢价{format_percent(row.get('建议挂单溢价'))} / 上限{format_percent(row.get('挂单上限溢价'))}",
                 f"挂单理由: {row.get('挂单建议理由', '-')}",
+                f"量比提示: {row.get('昨日前日量比提示', '-') or '-'}",
                 "",
             ]
         )
@@ -1556,6 +1612,10 @@ def main() -> None:
     print(f"竞昨成交比阈值: {format_ratio_threshold(status.get('竞昨成交比阈值'))}")
     print(f"竞价涨幅过滤: {format_change_filter(status.get('竞价涨幅下限'), status.get('竞价涨幅上限'))}")
     print(f"未匹配占比阈值: {format_ratio_threshold(status.get('未匹配占比阈值'))}")
+    print(
+        f"昨日前日量比风险提示: >{status.get('昨日前日量比风险阈值', YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD)} 标记谨慎，"
+        f"不默认剔除 / 入选风险数={status.get('入选量比风险数', 0)}"
+    )
     print(f"仓位规则: {status.get('仓位规则')} / {status.get('仓位市场分层')}市场")
     print(f"挂单建议: {'启用' if status.get('挂单建议启用') else '关闭'}")
     print(
@@ -1591,6 +1651,8 @@ def main() -> None:
                     "竞价匹配金额_openapi",
                     "竞价未匹配占比",
                     "竞昨成交比",
+                    "昨日前日成交量比",
+                    "昨日前日量比风险",
                     "个股热度排名昨日",
                     "建议权重",
                     "挂单建议",

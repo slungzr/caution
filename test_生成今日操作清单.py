@@ -202,6 +202,7 @@ class DailyOperationListTests(unittest.TestCase):
                 "股票简称": ["低比", "达标", "高比"],
                 "竞价匹配金额_openapi": [60_000_000, 60_000_000, 60_000_000],
                 "竞昨成交比": [0.021, 0.022, 0.05],
+                "昨日前日成交量比": [1.0, 9.0, 2.0],
                 "竞价涨幅今日": 0,
                 "竞价未匹配占比": [0.3, 0.2, 0.1],
                 "实体涨跌幅昨日": [1.0, 1.0, 1.0],
@@ -228,9 +229,15 @@ class DailyOperationListTests(unittest.TestCase):
         self.assertEqual(status["竞昨过滤后"], 2)
         self.assertIsNone(status["未匹配占比阈值"])
         self.assertEqual(status["未匹配过滤后"], 2)
+        self.assertEqual(status["昨日前日量比风险阈值"], daily_operation_list.YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD)
+        self.assertEqual(status["入选量比风险数"], 1)
         self.assertEqual(set(filtered["基础代码"]), {"000002", "000003"})
         self.assertEqual(len(selected), 2)
         self.assertIn("挂单建议", selected.columns)
+        risk_by_code = selected.set_index("基础代码")["昨日前日量比风险"].to_dict()
+        self.assertEqual(risk_by_code["000002"], "谨慎")
+        self.assertEqual(risk_by_code["000003"], "正常")
+        self.assertIn("极端放量", selected.set_index("基础代码").loc["000002", "昨日前日量比提示"])
 
     def test_apply_strategy_accepts_top_n_override(self) -> None:
         df = pd.DataFrame(
