@@ -304,14 +304,28 @@ def standardize_market_cap_frame(df: pd.DataFrame, trade_date: pd.Timestamp, nor
     return out.reset_index(drop=True)
 
 
+def try_standardize_market_cap_frame(
+    df: pd.DataFrame,
+    trade_date: pd.Timestamp,
+    normalize_code,
+    query_url: str,
+) -> pd.DataFrame:
+    try:
+        return standardize_market_cap_frame(df, trade_date, normalize_code)
+    except KeyError as exc:
+        print(f"问财市值结果无效 date={trade_date:%Y%m%d}: {exc}; url={query_url}")
+        return pd.DataFrame(columns=["日期", "基础代码", MARKET_CAP_COLUMN])
+
+
 def load_cached_market_cap(trade_date: pd.Timestamp) -> pd.DataFrame:
     cache_path = CACHE_DIR / f"{pd.Timestamp(trade_date):%Y%m%d}.csv"
     if not cache_path.exists():
         return pd.DataFrame()
-    df = pd.read_csv(cache_path, encoding="utf-8-sig")
+    df = pd.read_csv(cache_path, encoding="utf-8-sig", dtype={"基础代码": str})
     if df.empty:
         return df
     df["日期"] = pd.to_datetime(df["日期"], errors="coerce").dt.normalize()
+    df["基础代码"] = df["基础代码"].astype(str).str.zfill(6)
     df[MARKET_CAP_COLUMN] = normalize_amount_series(df[MARKET_CAP_COLUMN])
     return df.dropna(subset=["日期", "基础代码", MARKET_CAP_COLUMN]).reset_index(drop=True)
 
@@ -369,8 +383,9 @@ def fetch_market_cap_with_playwright(
             if cached.empty:
                 query = market_cap_query(prev_date)
                 df, _payload, url = client.query(query)
-                cap_df = standardize_market_cap_frame(df, trade_date, normalize_code)
-                pieces.append(cap_df)
+                cap_df = try_standardize_market_cap_frame(df, trade_date, normalize_code, url)
+                if not cap_df.empty:
+                    pieces.append(cap_df)
                 print(f"Playwright市值完成 date={trade_date:%Y%m%d} rows={len(cap_df)} url={url}")
                 time.sleep(1.2)
 
@@ -383,8 +398,9 @@ def fetch_market_cap_with_playwright(
             for code_chunk in chunk_list(missing_codes, 30):
                 query = code_market_cap_query(code_chunk, prev_date)
                 df, _payload, url = client.query(query)
-                cap_df = standardize_market_cap_frame(df, trade_date, normalize_code)
-                pieces.append(cap_df)
+                cap_df = try_standardize_market_cap_frame(df, trade_date, normalize_code, url)
+                if not cap_df.empty:
+                    pieces.append(cap_df)
                 print(
                     f"Playwright代码市值完成 date={trade_date:%Y%m%d} "
                     f"codes={len(code_chunk)} rows={len(cap_df)} url={url}"

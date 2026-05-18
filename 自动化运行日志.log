@@ -245,3 +245,132 @@ requests.exceptions.SSLError: HTTPSConnectionPool(host='www.legulegu.com', port=
 2026-04-29 09:30:15 - INFO - 推送判断 should_push=True no_push=False push=False
 2026-04-29 09:30:15 - INFO - PushPlus推送成功 title=2026-04-29 竞价爬升操作清单 response={"code":200,"msg":"执行成功","data":"ca803be0b9104e8f8fcc51a7fc2d4f4d"}
 2026-04-29 09:30:15 - INFO - 运行成功 trade_date=2026-04-29 raw=17 amount=0 body=0 industry=0 selected=0
+2026-05-02 21:31:34 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-02 21:31:34 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp5pwkpkjf\市场宽度历史.csv
+2026-05-02 23:33:03 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-02 23:33:03 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpfe941ikg\市场宽度历史.csv
+2026-05-02 23:41:01 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-02 23:41:01 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp_d0df5xw\市场宽度历史.csv
+2026-05-02 23:41:26 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-02 23:41:26 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp6u2x8u73\市场宽度历史.csv
+2026-05-03 07:46:55 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-03 07:46:55 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpoykgmg5_\市场宽度历史.csv
+2026-05-03 09:55:32 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-03 09:55:32 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpag_6lz1s\市场宽度历史.csv
+2026-05-03 10:01:40 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-03 10:01:40 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpmfq0h0ge\市场宽度历史.csv
+2026-05-03 11:11:59 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-03 11:11:59 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp39xg48pc\市场宽度历史.csv
+2026-05-03 11:14:21 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-03 11:14:21 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpnz7j0jj0\市场宽度历史.csv
+2026-05-03 15:38:24 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-03 15:38:24 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpzmnm15xq\市场宽度历史.csv
+2026-05-03 15:38:34 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-03 15:38:34 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpcx3tgijb\市场宽度历史.csv
+2026-05-03 22:30:07 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-03 22:30:07 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp1o_21i57\市场宽度历史.csv
+2026-05-03 23:16:27 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-03 23:16:27 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpn2khexh3\市场宽度历史.csv
+2026-05-04 10:08:37 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-04 10:08:37 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpdurcqxqx\市场宽度历史.csv
+2026-05-04 14:26:19 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-04 14:26:19 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmph52jt1jx\市场宽度历史.csv
+2026-05-04 14:26:35 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-04 14:26:35 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp5jdh4zu0\市场宽度历史.csv
+2026-05-04 14:26:35 - ERROR - 9:24预清单监控失败
+Traceback (most recent call last):
+  File "C:\Users\zr\Documents\caution\生成924预清单监控.py", line 572, in <module>
+    main()
+  File "C:\Users\zr\Documents\caution\生成924预清单监控.py", line 522, in main
+    args = parse_args()
+  File "C:\Users\zr\Documents\caution\生成924预清单监控.py", line 140, in parse_args
+    return parser.parse_args()
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 1825, in parse_args
+    args, argv = self.parse_known_args(args, namespace)
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 1858, in parse_known_args
+    namespace, args = self._parse_known_args(args, namespace)
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 2067, in _parse_known_args
+    start_index = consume_optional(start_index)
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 2007, in consume_optional
+    take_action(action, args, option_string)
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 1935, in take_action
+    action(self, namespace, argument_values, option_string)
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 1099, in __call__
+    parser.print_help()
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 2555, in print_help
+    self._print_message(self.format_help(), file)
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 2539, in format_help
+    return formatter.format_help()
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 283, in format_help
+    help = self._root_section.format_help()
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 214, in format_help
+    item_help = join([func(*args) for func, args in self.items])
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 214, in <listcomp>
+    item_help = join([func(*args) for func, args in self.items])
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 214, in format_help
+    item_help = join([func(*args) for func, args in self.items])
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 214, in <listcomp>
+    item_help = join([func(*args) for func, args in self.items])
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 533, in _format_action
+    help_text = self._expand_help(action)
+  File "C:\Users\zr\miniconda3\lib\argparse.py", line 630, in _expand_help
+    return self._get_help_string(action) % params
+ValueError: incomplete format
+2026-05-04 14:27:00 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-04 14:27:00 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpsodru62l\市场宽度历史.csv
+2026-05-04 14:27:43 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-04 14:27:43 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpazka4kvd\市场宽度历史.csv
+2026-05-04 14:28:03 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-04 14:28:03 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp7rcg441_\市场宽度历史.csv
+2026-05-04 14:52:54 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-04 14:52:54 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpw4ye10z_\市场宽度历史.csv
+2026-05-04 18:06:00 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-04 18:06:00 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp0qb_curg\市场宽度历史.csv
+2026-05-04 18:17:24 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-04 18:17:24 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp81pf147s\市场宽度历史.csv
+2026-05-05 22:53:27 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-05 22:53:27 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp2v3y9hlj\市场宽度历史.csv
+2026-05-10 00:56:25 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-10 00:56:25 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp1w7y7m8s\市场宽度历史.csv
+2026-05-10 00:58:16 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-10 00:58:16 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpd62rtlho\市场宽度历史.csv
+2026-05-10 13:53:11 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-10 13:53:11 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp5u23zcc7\市场宽度历史.csv
+2026-05-10 14:07:37 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-10 14:07:37 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpyl4ypisl\市场宽度历史.csv
+2026-05-10 23:42:58 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-10 23:42:58 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpxwb334wd\市场宽度历史.csv
+2026-05-10 23:46:35 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-10 23:46:36 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpz_sdgmyl\市场宽度历史.csv
+2026-05-11 01:14:29 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-11 01:14:29 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpcs8pxqnb\市场宽度历史.csv
+2026-05-11 21:13:21 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-11 21:13:21 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpqp53aphp\市场宽度历史.csv
+2026-05-11 22:49:12 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-11 22:49:12 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpomg2l3m9\市场宽度历史.csv
+2026-05-11 23:14:21 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-11 23:14:21 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmphro6g5mg\市场宽度历史.csv
+2026-05-12 05:18:10 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-12 05:18:10 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp02v4u6vc\市场宽度历史.csv
+2026-05-12 21:21:18 - INFO - 市场快照过期，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27
+2026-05-12 21:21:18 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp98fxvwdi\市场宽度历史.csv
+2026-05-12 22:16:10 - INFO - 市场快照过期或缺字段，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27 missing_fields=[]
+2026-05-12 22:16:10 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmppkb75_ho\市场宽度历史.csv
+2026-05-13 00:13:49 - INFO - 市场快照过期或缺字段，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27 missing_fields=[]
+2026-05-13 00:13:49 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpv5o84rje\市场宽度历史.csv
+2026-05-13 00:29:38 - INFO - 市场快照过期或缺字段，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27 missing_fields=[]
+2026-05-13 00:29:39 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp5qybd1w6\市场宽度历史.csv
+2026-05-13 20:06:26 - INFO - 市场快照过期或缺字段，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27 missing_fields=[]
+2026-05-13 20:06:27 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmptpt0k2s1\市场宽度历史.csv
+2026-05-17 00:15:03 - INFO - 市场快照过期或缺字段，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27 missing_fields=[]
+2026-05-17 00:15:04 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmphejn05g9\市场宽度历史.csv
+2026-05-17 00:16:21 - INFO - 市场快照过期或缺字段，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27 missing_fields=[]
+2026-05-17 00:16:21 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmp3kt58ycd\市场宽度历史.csv
+2026-05-17 09:45:18 - INFO - 市场快照过期或缺字段，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27 missing_fields=[]
+2026-05-17 09:45:18 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpcpmp08ge\市场宽度历史.csv
+2026-05-17 09:46:11 - INFO - 市场快照过期或缺字段，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27 missing_fields=[]
+2026-05-17 09:46:11 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpdpjalrsj\市场宽度历史.csv
+2026-05-17 10:20:11 - INFO - 市场快照过期或缺字段，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27 missing_fields=[]
+2026-05-17 10:20:12 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmpnklhxu4b\市场宽度历史.csv
+2026-05-17 10:25:24 - INFO - 市场快照过期或缺字段，尝试刷新 snapshot_date=2026-04-24 required_date=2026-04-27 missing_fields=[]
+2026-05-17 10:25:24 - WARNING - 市场宽度历史文件写入失败，继续更新最新快照: C:\Users\zr\AppData\Local\Temp\tmppk47_0gz\市场宽度历史.csv

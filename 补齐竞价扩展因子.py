@@ -79,7 +79,13 @@ def get_target_trade_dates(
         (calendar_df["trade_date"] >= start_date) & (calendar_df["trade_date"] <= end_date),
         "trade_date",
     ].tolist()
-    return [pd.Timestamp(date).normalize() for date in dates]
+    target_dates = [pd.Timestamp(date).normalize() for date in dates]
+    today = pd.Timestamp.today().normalize()
+    future_dates = [date for date in target_dates if date > today]
+    if future_dates:
+        print("跳过未来交易日:", [date.strftime("%Y%m%d") for date in future_dates])
+        target_dates = [date for date in target_dates if date <= today]
+    return target_dates
 
 
 def build_prev_maps(operate_mod) -> dict[pd.Timestamp, tuple[pd.Timestamp, pd.Timestamp]]:
@@ -171,8 +177,8 @@ def fetch_signal_for_date(
     }
 
     frames: list[pd.DataFrame] = []
-    for label in ["base", "detail", "amount"]:
-        frame = operate_mod.query_wencai(queries[label], cookies)
+    for label, question in queries.items():
+        frame = operate_mod.query_wencai(question, cookies)
         standardized = operate_mod.standardize_frame(frame, date_map)
         standardized = standardize_extra_columns(standardized)
         frames.append(standardized)
@@ -181,6 +187,11 @@ def fetch_signal_for_date(
     if merged.empty:
         return merged
     merged = standardize_extra_columns(merged)
+    # Older iwencai historical pages sometimes omit prev-prev volume. Keep the
+    # date usable for current live rules; the volume-ratio warning will be NaN.
+    for optional_column in ["成交量昨日", "成交量前日"]:
+        if optional_column not in merged.columns:
+            merged[optional_column] = pd.NA
     merged = operate_mod.compute_factors(merged)
     merged["日期"] = trade_date.strftime("%Y%m%d")
     merged["个股热度排名_openapi"] = pd.to_numeric(

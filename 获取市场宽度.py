@@ -115,13 +115,21 @@ def export_snapshot(history_df: pd.DataFrame, snapshot_path: Path) -> dict[str, 
     latest_row = history_df.iloc[-1]
     latest_date = pd.Timestamp(latest_row["日期"]).strftime("%Y-%m-%d")
     diff20 = int(latest_row["市场20日高低差"])
+    diff60 = int(latest_row["市场60日高低差"])
+    diff120 = int(latest_row["市场120日高低差"])
     snapshot = {
         "日期": latest_date,
         "市场20日新高数": int(latest_row["市场20日新高数"]),
         "市场20日新低数": int(latest_row["市场20日新低数"]),
         "市场20日高低差": diff20,
-        "开仓开关": "通过" if diff20 >= 0 else "不通过",
-        "规则": "市场20日高低差 >= 0",
+        "市场60日新高数": int(latest_row["市场60日新高数"]),
+        "市场60日新低数": int(latest_row["市场60日新低数"]),
+        "市场60日高低差": diff60,
+        "市场120日新高数": int(latest_row["市场120日新高数"]),
+        "市场120日新低数": int(latest_row["市场120日新低数"]),
+        "市场120日高低差": diff120,
+        "开仓开关": "通过" if diff20 >= -600 and diff120 >= 0 else "不通过",
+        "规则": "市场20日高低差 >= -600 且 市场120日高低差 >= 0",
         "更新时间": datetime.now().astimezone().isoformat(timespec="seconds"),
         "数据来源": MARKET_BREADTH_URL,
     }
@@ -139,6 +147,12 @@ def main() -> None:
     print(f"市场20日新高数: {snapshot['市场20日新高数']}")
     print(f"市场20日新低数: {snapshot['市场20日新低数']}")
     print(f"市场20日高低差: {snapshot['市场20日高低差']}")
+    print(f"市场60日新高数: {snapshot['市场60日新高数']}")
+    print(f"市场60日新低数: {snapshot['市场60日新低数']}")
+    print(f"市场60日高低差: {snapshot['市场60日高低差']}")
+    print(f"市场120日新高数: {snapshot['市场120日新高数']}")
+    print(f"市场120日新低数: {snapshot['市场120日新低数']}")
+    print(f"市场120日高低差: {snapshot['市场120日高低差']}")
     print(f"开仓开关: {snapshot['开仓开关']} (规则: {snapshot['规则']})")
     print(f"历史文件: {HISTORY_CSV}")
     print(f"最新快照: {SNAPSHOT_JSON}")
