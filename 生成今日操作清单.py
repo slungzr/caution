@@ -62,8 +62,10 @@ INDUSTRY_CHANGE_MIN = 0.0
 PREV_BODY_MIN = -5.0
 YESTERDAY_PREV_VOLUME_RATIO_MIN = 0.4
 YESTERDAY_PREV_VOLUME_RATIO_FILTER_ENABLED = True
-POSITION_WEIGHT_POLICY_NAME = "固定TOP2_30_70_竞价额p1_压缩0.75"
-POSITION_WEIGHT_STRONG = (0.30, 0.70, 0.0)
+POSITION_WEIGHT_POLICY_NAME = "强市TOP2_1_0_弱市30_70"
+POSITION_WEIGHT_STRONG_MARKET20_DIFF = 250.0
+POSITION_WEIGHT_MIDDLE_MARKET20_DIFF = 100.0
+POSITION_WEIGHT_STRONG = (1.00, 0.00, 0.00)
 POSITION_WEIGHT_MIDDLE = (0.30, 0.70, 0.0)
 POSITION_WEIGHT_WEAK = (0.30, 0.70, 0.0)
 POSITION_WEIGHT_AMOUNT_TILT_ENABLED = True
@@ -259,6 +261,15 @@ def resolve_market_layer(snapshot: dict[str, Any]) -> str:
     return "弱"
 
 
+def resolve_position_market_layer(snapshot: dict[str, Any]) -> str:
+    market_diff = pd.to_numeric(pd.Series([snapshot.get("市场20日高低差")]), errors="coerce").iloc[0]
+    if pd.notna(market_diff) and float(market_diff) >= POSITION_WEIGHT_STRONG_MARKET20_DIFF:
+        return "强"
+    if pd.notna(market_diff) and float(market_diff) >= POSITION_WEIGHT_MIDDLE_MARKET20_DIFF:
+        return "中"
+    return "弱"
+
+
 def resolve_dynamic_auction_ratio_threshold(
     snapshot: dict[str, Any],
     middle_ratio: float | None,
@@ -294,7 +305,7 @@ def normalize_weight_curve(curve: tuple[float, ...], selected_count: int) -> lis
 
 
 def resolve_position_weights(snapshot: dict[str, Any], selected_count: int) -> tuple[str, list[float]]:
-    layer = resolve_market_layer(snapshot)
+    layer = resolve_position_market_layer(snapshot)
     if layer == "强":
         curve = POSITION_WEIGHT_STRONG
     elif layer == "中":
