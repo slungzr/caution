@@ -32,11 +32,24 @@ MARKET_WIDTH_SCRIPT = BASE_DIR / "获取市场宽度.py"
 OUTPUT_PREFIX = BASE_DIR / "今日操作清单"
 DATA_ARCHIVE_DIR = BASE_DIR / "daily_data" / "竞价爬升"
 ARCHIVE_SUMMARY_CSV = DATA_ARCHIVE_DIR / "竞价爬升-每日采集汇总.csv"
+TRADE_RESULT_CSV = BASE_DIR / "实盘交易记录.csv"
 TOP_N = 2
 MIN_AUCTION_AMOUNT = 50_000_000
 MIN_AUCTION_TO_YESTERDAY_RATIO = 0.022
+DEFAULT_AUCTION_RATIO_MODE = "estimated"
+DYNAMIC_AUCTION_RATIO_ENABLED = True
+DYNAMIC_AUCTION_RATIO_STRONG_MARKET20_DIFF = 500
+DYNAMIC_AUCTION_RATIO_WEAK_MARKET20_DIFF = 0
+DYNAMIC_AUCTION_RATIO_STRONG = 0.020
+DYNAMIC_AUCTION_RATIO_WEAK = 0.025
 MIN_AUCTION_CHANGE = -9.0
-MAX_AUCTION_CHANGE = 6.0
+MAX_AUCTION_CHANGE = None
+MIN_MARKET_20_HIGH_LOW_DIFF = -600
+MIN_MARKET_60_HIGH_LOW_DIFF: float | None = None
+MIN_MARKET_120_HIGH_LOW_DIFF = 0
+LOSS_COOLDOWN_ENABLED = True
+LOSS_COOLDOWN_CONSECUTIVE_LOSSES = 2
+LOSS_COOLDOWN_DAYS = 1
 DEFAULT_MIN_UNMATCHED_RATIO: float | None = None
 DYNAMIC_TOP_N_ENABLED = False
 DYNAMIC_TOP_N_STRONG_MARKET_DIFF = 500
@@ -46,11 +59,17 @@ DYNAMIC_TOP_N_WEAK_MARKET_TOP_N = 1
 ENTRY_DAY_LOW_FROM_OPEN_RISK_EXIT = -0.05
 DEFAULT_INDUSTRY_FILTER_ENABLED = False
 INDUSTRY_CHANGE_MIN = 0.0
-PREV_BODY_MIN = 0.0
-POSITION_WEIGHT_POLICY_NAME = "固定TOP2_等权"
-POSITION_WEIGHT_STRONG = (1.0, 1.0, 1.0)
-POSITION_WEIGHT_MIDDLE = (1.0, 1.0, 1.0)
-POSITION_WEIGHT_WEAK = (1.0, 1.0, 1.0)
+PREV_BODY_MIN = -5.0
+YESTERDAY_PREV_VOLUME_RATIO_MIN = 0.4
+YESTERDAY_PREV_VOLUME_RATIO_FILTER_ENABLED = True
+POSITION_WEIGHT_POLICY_NAME = "固定TOP2_30_70_竞价额p1_压缩0.75"
+POSITION_WEIGHT_STRONG = (0.30, 0.70, 0.0)
+POSITION_WEIGHT_MIDDLE = (0.30, 0.70, 0.0)
+POSITION_WEIGHT_WEAK = (0.30, 0.70, 0.0)
+POSITION_WEIGHT_AMOUNT_TILT_ENABLED = True
+POSITION_WEIGHT_AMOUNT_TILT_BASE = 50_000_000
+POSITION_WEIGHT_AMOUNT_TILT_POWER = 1.0
+POSITION_WEIGHT_POST_NORMALIZE_CAP = 0.75
 EXECUTION_ADVICE_ENABLED = True
 EXECUTION_NORMAL_PREMIUM = 0.005
 EXECUTION_NORMAL_PREMIUM_MAX = 0.01
@@ -59,7 +78,22 @@ EXECUTION_HIGH_PREMIUM_MAX = 0.02
 EXECUTION_NO_CHASE_PREMIUM = 0.0
 EXECUTION_LOW_DISCOUNT = -0.01
 EXECUTION_LOW_DISCOUNT_MAX = -0.015
-YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD = 8.0
+YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD = 20.0
+VOLUME_SHAPE_RISK_FILTER_ENABLED = True
+VOLUME_SHAPE_BODY0_VOL_RATIO_MIN = 5.0
+VOLUME_SHAPE_BODY0_MARKET20_MIN = 200.0
+VOLUME_SHAPE_BODY0_MARKET20_MAX = 1000.0
+VOLUME_SHAPE_PULLBACK_YESTERDAY_BODY_MAX = -8.0
+VOLUME_SHAPE_PULLBACK_PREV_BODY_MIN = 5.0
+VOLUME_SHAPE_PULLBACK_MARKET20_MIN = 800.0
+EARLY_WEAK_CONTINUATION_RISK_FILTER_ENABLED = True
+EARLY_WEAK_CONTINUATION_M120_MAX = 80.0
+EARLY_WEAK_CONTINUATION_BODY_Y_MAX = -10.0
+EARLY_WEAK_CONTINUATION_CHG_MAX = -2.7
+EARLY_OVERHEAT_WEAK_RISK_M20_MIN = 1000.0
+EARLY_OVERHEAT_WEAK_RISK_M120_MAX = 250.0
+EARLY_OVERHEAT_WEAK_RISK_BODY_Y_MAX = -6.5
+EARLY_OVERHEAT_WEAK_RISK_CHG_MAX = -3.0
 SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业联动探索.py"
 OPEN_SECTOR_EXPLORER_SCRIPT = BASE_DIR / "竞价行业开盘联动探索.py"
 PUSHPLUS_URL = "http://www.pushplus.plus/send"
@@ -93,10 +127,16 @@ ARCHIVE_SUMMARY_COLUMNS = [
     "昨收估算",
     "昨日成交额估算",
     "竞昨成交比估算",
+    "竞昨成交比_成交金额口径",
     "竞昨成交比",
+    "竞昨成交比口径",
     "昨日前日成交量比",
     "昨日前日量比风险",
     "昨日前日量比提示",
+    "量价结构风险",
+    "量价结构提示",
+    "早期弱承接风险",
+    "早期弱承接提示",
     "申万一级行业代码",
     "申万一级行业",
     "申万一级行业涨跌幅",
@@ -104,6 +144,8 @@ ARCHIVE_SUMMARY_COLUMNS = [
     "历史回放",
     "开仓开关",
     "市场20日高低差",
+    "市场60日高低差",
+    "市场120日高低差",
     "行业强度口径",
     "策略原始候选数",
     "策略配置最大入选数",
@@ -113,17 +155,49 @@ ARCHIVE_SUMMARY_COLUMNS = [
     "策略动态持仓中市场阈值",
     "策略盘后弱承接风控阈值",
     "策略金额过滤后",
+    "策略竞昨成交比口径",
     "策略竞昨成交比阈值",
+    "策略竞昨成交比基础阈值",
+    "策略动态竞昨阈值启用",
+    "策略动态竞昨市场分层",
+    "策略动态竞昨强市场20阈值",
+    "策略动态竞昨弱市场20阈值",
+    "策略动态竞昨强市场阈值",
+    "策略动态竞昨中市场阈值",
+    "策略动态竞昨弱市场阈值",
     "策略竞昨过滤后",
     "策略竞价涨幅下限",
     "策略竞价涨幅上限",
     "策略竞价涨幅过滤后",
+    "策略市场20日高低差阈值",
+    "策略市场60日高低差阈值",
+    "策略市场120日高低差阈值",
+    "策略市场宽度过滤后",
+    "策略市场60过滤后",
+    "策略连续亏损冷却启用",
+    "策略连续亏损阈值",
+    "策略连续亏损冷却天数",
+    "策略连续亏损最近亏损数",
+    "策略连续亏损冷却剩余交易日",
+    "策略连续亏损冷却触发",
     "策略实体过滤后",
     "策略行业过滤启用",
     "策略行业过滤后",
     "策略未匹配占比阈值",
     "策略未匹配过滤后",
+    "策略昨日前日成交量比下限",
+    "策略昨日前日成交量比过滤启用",
+    "策略昨日前日成交量比过滤后",
+    "策略昨日前日成交量比过滤数",
+    "策略早期弱承接风险过滤启用",
+    "策略早期弱承接风险规则",
+    "策略早期弱承接风险过滤后",
+    "策略早期弱承接风险过滤数",
     "策略昨日前日量比风险阈值",
+    "策略量价结构风险过滤启用",
+    "策略量价结构风险过滤后",
+    "策略量价结构风险过滤数",
+    "策略量价结构风险规则",
     "策略仓位规则",
     "策略仓位市场分层",
     "策略最终候选数",
@@ -185,6 +259,27 @@ def resolve_market_layer(snapshot: dict[str, Any]) -> str:
     return "弱"
 
 
+def resolve_dynamic_auction_ratio_threshold(
+    snapshot: dict[str, Any],
+    middle_ratio: float | None,
+    dynamic_enabled: bool = DYNAMIC_AUCTION_RATIO_ENABLED,
+) -> tuple[str, float | None]:
+    if middle_ratio is None:
+        return "关闭", None
+    if not dynamic_enabled:
+        return "固定", middle_ratio
+
+    market20 = pd.to_numeric(pd.Series([snapshot.get("市场20日高低差")]), errors="coerce").iloc[0]
+    if pd.isna(market20):
+        return "中-缺市场20", middle_ratio
+    market20_value = float(market20)
+    if market20_value >= DYNAMIC_AUCTION_RATIO_STRONG_MARKET20_DIFF:
+        return "强", DYNAMIC_AUCTION_RATIO_STRONG
+    if market20_value < DYNAMIC_AUCTION_RATIO_WEAK_MARKET20_DIFF:
+        return "弱", DYNAMIC_AUCTION_RATIO_WEAK
+    return "中", middle_ratio
+
+
 def normalize_weight_curve(curve: tuple[float, ...], selected_count: int) -> list[float]:
     if selected_count <= 0:
         return []
@@ -207,6 +302,34 @@ def resolve_position_weights(snapshot: dict[str, Any], selected_count: int) -> t
     else:
         curve = POSITION_WEIGHT_WEAK
     return layer, normalize_weight_curve(curve, selected_count)
+
+
+def resolve_position_weights_for_selection(
+    snapshot: dict[str, Any],
+    selected_df: pd.DataFrame,
+) -> tuple[str, list[float]]:
+    layer, base_weights = resolve_position_weights(snapshot, len(selected_df))
+    if (
+        selected_df.empty
+        or not POSITION_WEIGHT_AMOUNT_TILT_ENABLED
+        or "竞价匹配金额_openapi" not in selected_df.columns
+    ):
+        return layer, base_weights
+
+    amounts = pd.to_numeric(selected_df["竞价匹配金额_openapi"], errors="coerce")
+    tilted_weights: list[float] = []
+    for base_weight, amount in zip(base_weights, amounts):
+        if pd.isna(amount):
+            multiplier = 1.0
+        else:
+            amount_ratio = max(float(amount) / POSITION_WEIGHT_AMOUNT_TILT_BASE, 0.1)
+            multiplier = amount_ratio ** POSITION_WEIGHT_AMOUNT_TILT_POWER
+        tilted_weights.append(base_weight * multiplier)
+    normalized_weights = normalize_weight_curve(tuple(tilted_weights), len(tilted_weights))
+    if POSITION_WEIGHT_POST_NORMALIZE_CAP is not None and len(normalized_weights) > 1:
+        compressed_weights = [min(weight, POSITION_WEIGHT_POST_NORMALIZE_CAP) for weight in normalized_weights]
+        normalized_weights = normalize_weight_curve(tuple(compressed_weights), len(compressed_weights))
+    return layer, normalized_weights
 
 
 def numeric_value(value: Any) -> float:
@@ -232,6 +355,95 @@ def build_volume_ratio_risk(row: pd.Series) -> dict[str, str]:
     return {
         "昨日前日量比风险": "正常",
         "昨日前日量比提示": "",
+    }
+
+
+def describe_volume_shape_risk_rule() -> str:
+    return (
+        f"前日实体<=0且昨日前日量比>={VOLUME_SHAPE_BODY0_VOL_RATIO_MIN:g}且"
+        f"{VOLUME_SHAPE_BODY0_MARKET20_MIN:g}<=市场20日<={VOLUME_SHAPE_BODY0_MARKET20_MAX:g}；"
+        f"或昨日实体<={VOLUME_SHAPE_PULLBACK_YESTERDAY_BODY_MAX:g}且"
+        f"前日实体>={VOLUME_SHAPE_PULLBACK_PREV_BODY_MIN:g}且"
+        f"市场20日>={VOLUME_SHAPE_PULLBACK_MARKET20_MIN:g}"
+    )
+
+
+def build_volume_shape_risk(row: pd.Series) -> dict[str, str]:
+    volume_ratio = numeric_value(row.get("昨日前日成交量比"))
+    yesterday_body = numeric_value(row.get("实体涨跌幅昨日"))
+    prev_body = numeric_value(row.get("实体涨跌幅前日"))
+    market20 = numeric_value(row.get("市场20日高低差"))
+    reasons: list[str] = []
+
+    if (
+        pd.notna(prev_body)
+        and pd.notna(volume_ratio)
+        and pd.notna(market20)
+        and prev_body <= 0
+        and volume_ratio >= VOLUME_SHAPE_BODY0_VOL_RATIO_MIN
+        and VOLUME_SHAPE_BODY0_MARKET20_MIN <= market20 <= VOLUME_SHAPE_BODY0_MARKET20_MAX
+    ):
+        reasons.append(
+            "前日实体<=0叠加昨日高量比，且市场20日处于中强区间，回测中易出现弱承接"
+        )
+
+    if (
+        pd.notna(yesterday_body)
+        and pd.notna(prev_body)
+        and pd.notna(market20)
+        and yesterday_body <= VOLUME_SHAPE_PULLBACK_YESTERDAY_BODY_MAX
+        and prev_body >= VOLUME_SHAPE_PULLBACK_PREV_BODY_MIN
+        and market20 >= VOLUME_SHAPE_PULLBACK_MARKET20_MIN
+    ):
+        reasons.append("强市场中前日大阳后昨日大阴，回测中次日接力赔率偏弱")
+
+    return {
+        "量价结构风险": "剔除" if reasons else "正常",
+        "量价结构提示": "；".join(reasons),
+    }
+
+
+def describe_early_weak_continuation_risk_rule() -> str:
+    return (
+        f"市场120日<={EARLY_WEAK_CONTINUATION_M120_MAX:g}且昨日实体<={EARLY_WEAK_CONTINUATION_BODY_Y_MAX:g}且"
+        f"竞价涨幅<={EARLY_WEAK_CONTINUATION_CHG_MAX:g}；"
+        f"或市场20日>={EARLY_OVERHEAT_WEAK_RISK_M20_MIN:g}且市场120日<={EARLY_OVERHEAT_WEAK_RISK_M120_MAX:g}且"
+        f"昨日实体<={EARLY_OVERHEAT_WEAK_RISK_BODY_Y_MAX:g}且竞价涨幅<={EARLY_OVERHEAT_WEAK_RISK_CHG_MAX:g}"
+    )
+
+
+def build_early_weak_continuation_risk(row: pd.Series) -> dict[str, str]:
+    market20 = numeric_value(row.get("市场20日高低差"))
+    market120 = numeric_value(row.get("市场120日高低差"))
+    yesterday_body = numeric_value(row.get("实体涨跌幅昨日"))
+    auction_change = numeric_value(row.get("竞价涨幅今日"))
+    reasons: list[str] = []
+
+    if (
+        pd.notna(market120)
+        and pd.notna(yesterday_body)
+        and pd.notna(auction_change)
+        and market120 <= EARLY_WEAK_CONTINUATION_M120_MAX
+        and yesterday_body <= EARLY_WEAK_CONTINUATION_BODY_Y_MAX
+        and auction_change <= EARLY_WEAK_CONTINUATION_CHG_MAX
+    ):
+        reasons.append("市场120日偏弱叠加昨日深跌且竞价偏弱，回测中容易延续弱承接")
+
+    if (
+        pd.notna(market20)
+        and pd.notna(market120)
+        and pd.notna(yesterday_body)
+        and pd.notna(auction_change)
+        and market20 >= EARLY_OVERHEAT_WEAK_RISK_M20_MIN
+        and market120 <= EARLY_OVERHEAT_WEAK_RISK_M120_MAX
+        and yesterday_body <= EARLY_OVERHEAT_WEAK_RISK_BODY_Y_MAX
+        and auction_change <= EARLY_OVERHEAT_WEAK_RISK_CHG_MAX
+    ):
+        reasons.append("20日过热但120日偏弱，昨日弱承接且竞价偏弱，回测中次日延续失手概率偏高")
+
+    return {
+        "早期弱承接风险": "剔除" if reasons else "正常",
+        "早期弱承接提示": "；".join(reasons),
     }
 
 
@@ -332,7 +544,27 @@ def parse_args() -> argparse.Namespace:
         "--min-auction-ratio",
         type=float,
         default=MIN_AUCTION_TO_YESTERDAY_RATIO,
-        help="竞昨成交比最低阈值，默认 0.022；可传 0.02 回放较宽松版本",
+        help="竞昨成交比中市场阈值，默认 0.022；动态竞昨开启时强市场用0.020、弱市场用0.025",
+    )
+    auction_ratio_mode_group = parser.add_mutually_exclusive_group()
+    auction_ratio_mode_group.add_argument(
+        "--dynamic-auction-ratio",
+        dest="dynamic_auction_ratio",
+        action="store_true",
+        default=DYNAMIC_AUCTION_RATIO_ENABLED,
+        help="启用市场20日分层动态竞昨阈值，默认开启",
+    )
+    auction_ratio_mode_group.add_argument(
+        "--fixed-auction-ratio",
+        dest="dynamic_auction_ratio",
+        action="store_false",
+        help="关闭市场20日分层，固定使用 --min-auction-ratio",
+    )
+    parser.add_argument(
+        "--auction-ratio-mode",
+        choices=["estimated", "amount"],
+        default=DEFAULT_AUCTION_RATIO_MODE,
+        help="竞昨成交比口径：estimated=用开盘价/竞价涨幅/昨日成交量估算昨日成交额；amount=直接用昨日成交金额。默认 estimated",
     )
     parser.add_argument(
         "--no-auction-ratio-filter",
@@ -349,18 +581,104 @@ def parse_args() -> argparse.Namespace:
         "--max-auction-change",
         type=float,
         default=MAX_AUCTION_CHANGE,
-        help="竞价涨幅最高阈值，默认 6；与 --min-auction-change 组成增强版过滤",
+        help="竞价涨幅最高阈值，默认不限；如需回放旧口径可传 6",
     )
     parser.add_argument(
         "--no-auction-change-filter",
         action="store_true",
-        help="关闭竞价涨幅 -9 到 6 过滤，仅用于回放对照旧策略",
+        help="关闭竞价涨幅过滤，仅用于回放对照旧策略",
+    )
+    parser.add_argument(
+        "--min-market20-high-low-diff",
+        type=float,
+        default=MIN_MARKET_20_HIGH_LOW_DIFF,
+        help="市场20日新高数-新低数最低阈值，默认 -600；当前主口径过滤短期极弱环境",
+    )
+    parser.add_argument(
+        "--no-market20-filter",
+        action="store_true",
+        help="关闭市场20日高低差过滤，仅用于回放对照",
+    )
+    parser.add_argument(
+        "--min-market60-high-low-diff",
+        type=float,
+        default=MIN_MARKET_60_HIGH_LOW_DIFF,
+        help="市场60日新高数-新低数最低阈值，默认关闭；如需回放旧口径可传 50",
+    )
+    parser.add_argument(
+        "--min-market120-high-low-diff",
+        type=float,
+        default=MIN_MARKET_120_HIGH_LOW_DIFF,
+        help="市场120日新高数-新低数最低阈值，默认 0；当前主口径确认中期市场环境",
+    )
+    parser.add_argument(
+        "--prev-body-min",
+        type=float,
+        default=PREV_BODY_MIN,
+        help="前日实体涨跌幅最低阈值，默认 -5",
+    )
+    parser.add_argument(
+        "--no-market60-filter",
+        action="store_true",
+        help="关闭市场60日高低差过滤，仅用于回放对照",
+    )
+    parser.add_argument(
+        "--no-market120-filter",
+        action="store_true",
+        help="关闭市场120日高低差过滤，仅用于回放对照",
+    )
+    parser.add_argument(
+        "--trade-result-file",
+        default=str(TRADE_RESULT_CSV),
+        help="已完成实盘交易记录CSV，用于连续亏损冷却建议；默认 实盘交易记录.csv",
+    )
+    parser.add_argument(
+        "--loss-cooldown-consecutive-losses",
+        type=positive_int,
+        default=LOSS_COOLDOWN_CONSECUTIVE_LOSSES,
+        help="连续亏损多少笔后给出冷却建议，默认 2",
+    )
+    parser.add_argument(
+        "--loss-cooldown-days",
+        type=positive_int,
+        default=LOSS_COOLDOWN_DAYS,
+        help="连续亏损触发后建议冷却多少个交易日，默认 1",
+    )
+    parser.add_argument(
+        "--no-loss-cooldown",
+        action="store_true",
+        default=not LOSS_COOLDOWN_ENABLED,
+        help="关闭连续亏损冷却建议，仅用于回放对照",
     )
     parser.add_argument(
         "--min-unmatched-ratio",
         type=float,
         default=DEFAULT_MIN_UNMATCHED_RATIO,
         help="竞价未匹配占比最低阈值，默认不启用；可传 0.005 回放近期增强版本",
+    )
+    parser.add_argument(
+        "--min-prevday-volume-ratio",
+        type=float,
+        default=YESTERDAY_PREV_VOLUME_RATIO_MIN,
+        help="昨日前日成交量比最低阈值，默认 0.4；低于该值的样本直接剔除",
+    )
+    parser.add_argument(
+        "--no-prevday-volume-ratio-filter",
+        action="store_true",
+        default=not YESTERDAY_PREV_VOLUME_RATIO_FILTER_ENABLED,
+        help="关闭昨日前日成交量比硬过滤，仅用于回放对照",
+    )
+    parser.add_argument(
+        "--no-volume-shape-risk-filter",
+        action="store_true",
+        default=not VOLUME_SHAPE_RISK_FILTER_ENABLED,
+        help="关闭量价结构风险硬过滤，仅用于回放对照",
+    )
+    parser.add_argument(
+        "--no-early-weak-continuation-filter",
+        action="store_true",
+        default=not EARLY_WEAK_CONTINUATION_RISK_FILTER_ENABLED,
+        help="关闭早期弱承接硬过滤，仅用于回放对照",
     )
     industry_group = parser.add_mutually_exclusive_group()
     industry_group.add_argument(
@@ -408,26 +726,58 @@ def refresh_market_snapshot() -> None:
     module.export_snapshot(history_df, MARKET_SNAPSHOT_JSON)
 
 
-def ensure_fresh_snapshot(snapshot: dict[str, Any], required_date: pd.Timestamp | None) -> dict[str, Any]:
-    if required_date is None:
+def missing_market_snapshot_fields(
+    snapshot: dict[str, Any],
+    require_market60: bool = MIN_MARKET_60_HIGH_LOW_DIFF is not None,
+    require_market120: bool = MIN_MARKET_120_HIGH_LOW_DIFF is not None,
+) -> list[str]:
+    missing: list[str] = []
+    if "日期" not in snapshot or pd.isna(pd.to_datetime(snapshot.get("日期"), errors="coerce")):
+        missing.append("日期")
+    required_fields = ["市场20日高低差"]
+    if require_market60:
+        required_fields.append("市场60日高低差")
+    if require_market120:
+        required_fields.append("市场120日高低差")
+    missing.extend(
+        field
+        for field in required_fields
+        if field not in snapshot
+        or pd.isna(pd.to_numeric(pd.Series([snapshot.get(field)]), errors="coerce").iloc[0])
+    )
+    return missing
+
+
+def ensure_fresh_snapshot(
+    snapshot: dict[str, Any],
+    required_date: pd.Timestamp | None,
+    require_market60: bool = MIN_MARKET_60_HIGH_LOW_DIFF is not None,
+    require_market120: bool = MIN_MARKET_120_HIGH_LOW_DIFF is not None,
+) -> dict[str, Any]:
+    missing_fields = missing_market_snapshot_fields(snapshot, require_market60, require_market120)
+    if required_date is None and not missing_fields:
         return snapshot
-    snapshot_date = pd.Timestamp(snapshot["日期"]).normalize()
-    required_date = required_date.normalize()
-    if snapshot_date >= required_date:
+    snapshot_date_value = pd.to_datetime(snapshot.get("日期"), errors="coerce")
+    snapshot_date = pd.Timestamp("1900-01-01") if pd.isna(snapshot_date_value) else pd.Timestamp(snapshot_date_value).normalize()
+    required_date = required_date.normalize() if required_date is not None else None
+    if required_date is not None and snapshot_date >= required_date and not missing_fields:
         return snapshot
 
     logging.info(
-        "市场快照过期，尝试刷新 snapshot_date=%s required_date=%s",
+        "市场快照过期或缺字段，尝试刷新 snapshot_date=%s required_date=%s missing_fields=%s",
         snapshot_date.strftime("%Y-%m-%d"),
-        required_date.strftime("%Y-%m-%d"),
+        required_date.strftime("%Y-%m-%d") if required_date is not None else None,
+        missing_fields,
     )
     refresh_market_snapshot()
     snapshot = read_snapshot(MARKET_SNAPSHOT_JSON)
     snapshot_date = pd.Timestamp(snapshot["日期"]).normalize()
-    if snapshot_date < required_date:
+    missing_fields = missing_market_snapshot_fields(snapshot, require_market60, require_market120)
+    if (required_date is not None and snapshot_date < required_date) or missing_fields:
         raise RuntimeError(
-            f"市场宽度快照过期: 当前 {snapshot_date.strftime('%Y-%m-%d')}，"
-            f"需要至少 {required_date.strftime('%Y-%m-%d')}。请检查 获取市场宽度.py 或数据源。"
+            f"市场宽度快照不可用: 当前 {snapshot_date.strftime('%Y-%m-%d')}，"
+            f"需要至少 {required_date.strftime('%Y-%m-%d') if required_date is not None else '不限'}，"
+            f"缺字段 {missing_fields}。请检查 获取市场宽度.py 或数据源。"
         )
     return snapshot
 
@@ -436,15 +786,22 @@ def read_market_snapshot(
     trade_date: pd.Timestamp,
     historical_replay: bool,
     required_date: pd.Timestamp | None = None,
+    require_market60: bool = MIN_MARKET_60_HIGH_LOW_DIFF is not None,
+    require_market120: bool = MIN_MARKET_120_HIGH_LOW_DIFF is not None,
 ) -> dict[str, Any]:
     if not historical_replay:
-        return ensure_fresh_snapshot(read_snapshot(MARKET_SNAPSHOT_JSON), required_date)
+        return ensure_fresh_snapshot(read_snapshot(MARKET_SNAPSHOT_JSON), required_date, require_market60, require_market120)
 
     if not MARKET_HISTORY_CSV.exists():
         raise FileNotFoundError(f"未找到市场宽度历史文件: {MARKET_HISTORY_CSV}")
 
     history_df = pd.read_csv(MARKET_HISTORY_CSV, encoding="utf-8-sig")
-    if "日期" not in history_df.columns or "市场20日高低差" not in history_df.columns:
+    required_columns = ["日期", "市场20日高低差"]
+    if require_market60:
+        required_columns.append("市场60日高低差")
+    if require_market120:
+        required_columns.append("市场120日高低差")
+    if any(column not in history_df.columns for column in required_columns):
         raise RuntimeError(f"市场宽度历史文件缺少必要字段: {MARKET_HISTORY_CSV}")
 
     history_df["日期"] = pd.to_datetime(history_df["日期"], errors="coerce").dt.normalize()
@@ -460,11 +817,39 @@ def read_market_snapshot(
     snapshot = {
         "日期": target_date.strftime("%Y-%m-%d"),
         "市场20日高低差": diff20,
-        "开仓开关": "通过" if diff20 >= 0 else "不通过",
-        "规则": "市场20日高低差 >= 0",
+        "开仓开关": "通过",
+        "规则": "市场20日高低差>=-600 且 市场120日高低差>=0；市场20日高低差同时用于动态竞昨阈值",
         "数据来源": str(MARKET_HISTORY_CSV),
     }
-    for column in ["市场20日新高数", "市场20日新低数"]:
+    if "市场60日高低差" in row.index and pd.notna(row["市场60日高低差"]):
+        diff60 = int(pd.to_numeric(row["市场60日高低差"], errors="raise"))
+        snapshot["市场60日高低差"] = diff60
+    if "市场120日高低差" in row.index and pd.notna(row["市场120日高低差"]):
+        snapshot["市场120日高低差"] = int(pd.to_numeric(row["市场120日高低差"], errors="raise"))
+    market_switch_passed = True
+    if MIN_MARKET_20_HIGH_LOW_DIFF is not None and diff20 < MIN_MARKET_20_HIGH_LOW_DIFF:
+        market_switch_passed = False
+    if (
+        MIN_MARKET_60_HIGH_LOW_DIFF is not None
+        and snapshot.get("市场60日高低差") is not None
+        and snapshot["市场60日高低差"] < MIN_MARKET_60_HIGH_LOW_DIFF
+    ):
+        market_switch_passed = False
+    if (
+        MIN_MARKET_120_HIGH_LOW_DIFF is not None
+        and snapshot.get("市场120日高低差") is not None
+        and snapshot["市场120日高低差"] < MIN_MARKET_120_HIGH_LOW_DIFF
+    ):
+        market_switch_passed = False
+    snapshot["开仓开关"] = "通过" if market_switch_passed else "不通过"
+    for column in [
+        "市场20日新高数",
+        "市场20日新低数",
+        "市场60日新高数",
+        "市场60日新低数",
+        "市场120日新高数",
+        "市场120日新低数",
+    ]:
         if column in row.index and pd.notna(row[column]):
             snapshot[column] = int(pd.to_numeric(row[column], errors="raise"))
     return snapshot
@@ -489,8 +874,134 @@ def pick_trade_dates(today_value: date | None = None) -> tuple[pd.Timestamp, pd.
     return valid_dates[-1], valid_dates[-2], valid_dates[-3]
 
 
+def resolve_local_path(path_text: str | Path) -> Path:
+    path = Path(path_text)
+    return path if path.is_absolute() else BASE_DIR / path
+
+
+def parse_trade_date_series(series: pd.Series) -> pd.Series:
+    text = series.astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+    parsed = pd.to_datetime(text, format="%Y%m%d", errors="coerce")
+    fallback = pd.to_datetime(series, errors="coerce")
+    return parsed.fillna(fallback).dt.normalize()
+
+
+def parse_return_series(series: pd.Series) -> pd.Series:
+    text = series.astype(str).str.strip()
+    is_percent = text.str.endswith("%", na=False)
+    cleaned = text.str.replace("%", "", regex=False)
+    values = pd.to_numeric(cleaned, errors="coerce")
+    values = values.where(~is_percent, values / 100)
+    values = values.where(values.abs() <= 1, values / 100)
+    return values
+
+
+def build_loss_cooldown_status(
+    trade_date: pd.Timestamp,
+    trade_result_file: str | Path = TRADE_RESULT_CSV,
+    enabled: bool = LOSS_COOLDOWN_ENABLED,
+    consecutive_losses: int = LOSS_COOLDOWN_CONSECUTIVE_LOSSES,
+    cooldown_days: int = LOSS_COOLDOWN_DAYS,
+    calendar_df: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    trade_result_path = resolve_local_path(trade_result_file)
+    status: dict[str, Any] = {
+        "启用": enabled,
+        "阈值": consecutive_losses,
+        "冷却天数": cooldown_days,
+        "交易记录文件": str(trade_result_path),
+        "文件存在": trade_result_path.exists(),
+        "有效记录数": 0,
+        "最近亏损数": 0,
+        "触发日期": None,
+        "冷却剩余交易日": 0,
+        "触发": False,
+        "说明": "连续亏损冷却建议关闭" if not enabled else "未触发连续亏损冷却建议",
+    }
+    if not enabled:
+        return status
+    if consecutive_losses < 1 or cooldown_days < 1:
+        raise ValueError("连续亏损冷却建议阈值和建议天数必须大于等于 1")
+    if not trade_result_path.exists():
+        status["说明"] = f"交易记录文件不存在，跳过连续亏损冷却建议: {trade_result_path.name}"
+        return status
+
+    records = pd.read_csv(trade_result_path, encoding="utf-8-sig")
+    if "观察状态" in records.columns:
+        records = records[records["观察状态"].astype(str).isin(["已卖出", "已完成", "closed", "Closed"])].copy()
+    return_column = next((column for column in ["单笔净收益率", "收益率", "净收益率", "盈亏比例"] if column in records.columns), None)
+    if return_column is None:
+        status["说明"] = f"交易记录缺少收益率字段，跳过连续亏损冷却建议: {trade_result_path.name}"
+        return status
+
+    date_column = next((column for column in ["卖出日期", "平仓日期", "交易日期", "日期"] if column in records.columns), None)
+    records = records.copy()
+    records["_收益率"] = parse_return_series(records[return_column])
+    records["_原始顺序"] = range(len(records))
+    if date_column is not None:
+        records["_卖出日期"] = parse_trade_date_series(records[date_column])
+        records = records[records["_卖出日期"].notna() & (records["_卖出日期"] < trade_date.normalize())].copy()
+    else:
+        records["_卖出日期"] = pd.NaT
+    records = records[records["_收益率"].notna()].copy()
+    if records.empty:
+        status["说明"] = "交易记录无可用已完成收益，未触发连续亏损冷却建议"
+        return status
+    sort_columns = ["_卖出日期", "_原始顺序"] if date_column is not None else ["_原始顺序"]
+    records = records.sort_values(sort_columns, kind="stable").reset_index(drop=True)
+    status["有效记录数"] = int(len(records))
+
+    loss_streak = 0
+    last_trigger_date: pd.Timestamp | None = None
+    last_event_was_trigger = False
+    for _, record in records.iterrows():
+        if float(record["_收益率"]) < 0:
+            loss_streak += 1
+            last_event_was_trigger = False
+        else:
+            loss_streak = 0
+            last_event_was_trigger = False
+        if loss_streak >= consecutive_losses:
+            last_trigger_date = pd.Timestamp(record["_卖出日期"]).normalize() if pd.notna(record["_卖出日期"]) else None
+            loss_streak = 0
+            last_event_was_trigger = True
+    status["最近亏损数"] = int(consecutive_losses if last_event_was_trigger else loss_streak)
+    if last_trigger_date is None:
+        status["说明"] = f"最近连续亏损 {loss_streak} 笔，未达到 {consecutive_losses} 笔冷却阈值"
+        return status
+
+    status["触发日期"] = last_trigger_date.strftime("%Y-%m-%d")
+    if date_column is None:
+        status["说明"] = "交易记录缺少卖出日期，无法判断冷却交易日"
+        return status
+
+    calendar = calendar_df.copy() if calendar_df is not None else load_trade_calendar()
+    calendar["trade_date"] = pd.to_datetime(calendar["trade_date"], errors="coerce").dt.normalize()
+    trade_days = calendar.loc[
+        (calendar["trade_date"] > last_trigger_date) & (calendar["trade_date"] <= trade_date.normalize()),
+        "trade_date",
+    ]
+    elapsed_days = int(len(trade_days))
+    if 1 <= elapsed_days <= cooldown_days:
+        remaining_days = cooldown_days - elapsed_days + 1
+        status["触发"] = True
+        status["冷却剩余交易日"] = remaining_days
+        status["说明"] = (
+            f"{last_trigger_date.strftime('%Y-%m-%d')} 触发连续{consecutive_losses}亏，"
+            f"今日处于第 {elapsed_days}/{cooldown_days} 个冷却交易日"
+        )
+    else:
+        status["说明"] = (
+            f"{last_trigger_date.strftime('%Y-%m-%d')} 曾触发连续{consecutive_losses}亏，"
+            f"已过 {elapsed_days} 个交易日，冷却结束"
+        )
+    return status
+
+
 def cn_date(ts: pd.Timestamp) -> str:
-    return f"{ts.month}月{ts.day}日"
+    # Historical replay must include the year; otherwise iwencai may resolve
+    # "1月16日" to the current year and silently return the wrong date.
+    return f"{ts.year}年{ts.month}月{ts.day}日"
 
 
 def date_token(ts: pd.Timestamp) -> str:
@@ -761,8 +1272,10 @@ def build_archive_record_frame(
     out.insert(2, "前日日期", date_token(prev2_date))
     out.insert(3, "采集时间", datetime.now().isoformat(timespec="seconds"))
     out["历史回放"] = historical_replay
-    out["开仓开关"] = snapshot.get("开仓开关")
+    out["开仓开关"] = status.get("开仓开关", snapshot.get("开仓开关"))
     out["市场20日高低差"] = snapshot.get("市场20日高低差")
+    out["市场60日高低差"] = snapshot.get("市场60日高低差")
+    out["市场120日高低差"] = snapshot.get("市场120日高低差")
     out["行业强度口径"] = sector_source
     out["策略原始候选数"] = status.get("原始候选数")
     out["策略配置最大入选数"] = status.get("配置最大入选数")
@@ -772,17 +1285,49 @@ def build_archive_record_frame(
     out["策略动态持仓中市场阈值"] = status.get("动态持仓中市场阈值")
     out["策略盘后弱承接风控阈值"] = status.get("盘后弱承接风控阈值")
     out["策略金额过滤后"] = status.get("金额过滤后")
+    out["策略竞昨成交比口径"] = status.get("竞昨成交比口径")
     out["策略竞昨成交比阈值"] = status.get("竞昨成交比阈值")
+    out["策略竞昨成交比基础阈值"] = status.get("竞昨成交比基础阈值")
+    out["策略动态竞昨阈值启用"] = status.get("动态竞昨阈值启用")
+    out["策略动态竞昨市场分层"] = status.get("动态竞昨市场分层")
+    out["策略动态竞昨强市场20阈值"] = status.get("动态竞昨强市场20阈值")
+    out["策略动态竞昨弱市场20阈值"] = status.get("动态竞昨弱市场20阈值")
+    out["策略动态竞昨强市场阈值"] = status.get("动态竞昨强市场阈值")
+    out["策略动态竞昨中市场阈值"] = status.get("动态竞昨中市场阈值")
+    out["策略动态竞昨弱市场阈值"] = status.get("动态竞昨弱市场阈值")
     out["策略竞昨过滤后"] = status.get("竞昨过滤后")
     out["策略竞价涨幅下限"] = status.get("竞价涨幅下限")
     out["策略竞价涨幅上限"] = status.get("竞价涨幅上限")
     out["策略竞价涨幅过滤后"] = status.get("竞价涨幅过滤后")
+    out["策略市场20日高低差阈值"] = status.get("市场20日高低差阈值")
+    out["策略市场60日高低差阈值"] = status.get("市场60日高低差阈值")
+    out["策略市场120日高低差阈值"] = status.get("市场120日高低差阈值")
+    out["策略市场宽度过滤后"] = status.get("市场宽度过滤后")
+    out["策略市场60过滤后"] = status.get("市场60过滤后")
+    out["策略连续亏损冷却启用"] = status.get("连续亏损冷却启用")
+    out["策略连续亏损阈值"] = status.get("连续亏损阈值")
+    out["策略连续亏损冷却天数"] = status.get("连续亏损冷却天数")
+    out["策略连续亏损最近亏损数"] = status.get("连续亏损最近亏损数")
+    out["策略连续亏损冷却剩余交易日"] = status.get("连续亏损冷却剩余交易日")
+    out["策略连续亏损冷却触发"] = status.get("连续亏损冷却触发")
     out["策略实体过滤后"] = status.get("实体过滤后")
     out["策略行业过滤启用"] = status.get("行业过滤启用")
     out["策略行业过滤后"] = status.get("行业过滤后")
     out["策略未匹配占比阈值"] = status.get("未匹配占比阈值")
     out["策略未匹配过滤后"] = status.get("未匹配过滤后")
+    out["策略昨日前日成交量比下限"] = status.get("昨日前日成交量比下限")
+    out["策略昨日前日成交量比过滤启用"] = status.get("昨日前日成交量比过滤启用")
+    out["策略昨日前日成交量比过滤后"] = status.get("昨日前日成交量比过滤后")
+    out["策略昨日前日成交量比过滤数"] = status.get("昨日前日成交量比过滤数")
+    out["策略早期弱承接风险过滤启用"] = status.get("早期弱承接风险过滤启用")
+    out["策略早期弱承接风险规则"] = status.get("早期弱承接风险规则")
+    out["策略早期弱承接风险过滤后"] = status.get("早期弱承接风险过滤后")
+    out["策略早期弱承接风险过滤数"] = status.get("早期弱承接风险过滤数")
     out["策略昨日前日量比风险阈值"] = status.get("昨日前日量比风险阈值")
+    out["策略量价结构风险过滤启用"] = status.get("量价结构风险过滤启用")
+    out["策略量价结构风险过滤后"] = status.get("量价结构风险过滤后")
+    out["策略量价结构风险过滤数"] = status.get("量价结构风险过滤数")
+    out["策略量价结构风险规则"] = status.get("量价结构风险规则")
     out["策略仓位规则"] = status.get("仓位规则")
     out["策略仓位市场分层"] = status.get("仓位市场分层")
     out["策略最终候选数"] = status.get("最终候选数")
@@ -835,6 +1380,26 @@ def build_archive_record_frame(
         if not filtered_df.empty and {"基础代码", "昨日前日量比提示"}.issubset(filtered_df.columns)
         else {}
     )
+    candidate_shape_risks = (
+        filtered_df.set_index("基础代码")["量价结构风险"].to_dict()
+        if not filtered_df.empty and {"基础代码", "量价结构风险"}.issubset(filtered_df.columns)
+        else {}
+    )
+    candidate_shape_risk_notes = (
+        filtered_df.set_index("基础代码")["量价结构提示"].to_dict()
+        if not filtered_df.empty and {"基础代码", "量价结构提示"}.issubset(filtered_df.columns)
+        else {}
+    )
+    candidate_early_weak_risks = (
+        filtered_df.set_index("基础代码")["早期弱承接风险"].to_dict()
+        if not filtered_df.empty and {"基础代码", "早期弱承接风险"}.issubset(filtered_df.columns)
+        else {}
+    )
+    candidate_early_weak_risk_notes = (
+        filtered_df.set_index("基础代码")["早期弱承接提示"].to_dict()
+        if not filtered_df.empty and {"基础代码", "早期弱承接提示"}.issubset(filtered_df.columns)
+        else {}
+    )
     selected_weight_rules = (
         selected_df.set_index("基础代码")["仓位规则"].to_dict()
         if not selected_df.empty and {"基础代码", "仓位规则"}.issubset(selected_df.columns)
@@ -855,6 +1420,10 @@ def build_archive_record_frame(
     out["挂单建议理由"] = out["基础代码"].map(selected_execution_reason)
     out["昨日前日量比风险"] = out["基础代码"].map(candidate_volume_risks)
     out["昨日前日量比提示"] = out["基础代码"].map(candidate_volume_risk_notes)
+    out["量价结构风险"] = out["基础代码"].map(candidate_shape_risks)
+    out["量价结构提示"] = out["基础代码"].map(candidate_shape_risk_notes)
+    out["早期弱承接风险"] = out["基础代码"].map(candidate_early_weak_risks)
+    out["早期弱承接提示"] = out["基础代码"].map(candidate_early_weak_risk_notes)
     out["仓位规则"] = out["基础代码"].map(selected_weight_rules)
     out["仓位市场分层"] = out["基础代码"].map(selected_weight_layers)
     out["策略排序名次"] = out["基础代码"].map(filtered_rank)
@@ -962,10 +1531,19 @@ def archive_daily_data(
             "industry_change_min": INDUSTRY_CHANGE_MIN,
             "min_auction_change": status.get("竞价涨幅下限"),
             "max_auction_change": status.get("竞价涨幅上限"),
+            "min_market20_high_low_diff": status.get("市场20日高低差阈值"),
+            "min_market60_high_low_diff": status.get("市场60日高低差阈值"),
+            "min_market120_high_low_diff": status.get("市场120日高低差阈值"),
+            "loss_cooldown_enabled": status.get("连续亏损冷却启用"),
+            "loss_cooldown_consecutive_losses": status.get("连续亏损阈值"),
+            "loss_cooldown_days": status.get("连续亏损冷却天数"),
+            "loss_cooldown_triggered": status.get("连续亏损冷却触发"),
             "position_weight_policy": status.get("仓位规则", POSITION_WEIGHT_POLICY_NAME),
             "position_weight_layer": status.get("仓位市场分层"),
             "min_unmatched_ratio": status.get("未匹配占比阈值"),
-            "prev_body_min": PREV_BODY_MIN,
+            "min_prevday_volume_ratio": status.get("昨日前日成交量比下限"),
+            "prevday_volume_ratio_filter_enabled": status.get("昨日前日成交量比过滤启用"),
+            "prev_body_min": status.get("前日实体阈值", PREV_BODY_MIN),
             "sector_source": sector_source,
             "status": status,
             "queries": queries,
@@ -986,10 +1564,13 @@ def build_queries(today_ts: pd.Timestamp, prev_ts: pd.Timestamp, prev2_ts: pd.Ti
     base_query = (
         f"{today_cn}9点25分最低价>{today_cn}9点24分最高价，"
         f"{today_cn}9点24分最低价>={today_cn}9点23分最高价，"
+        f"{today_cn}竞价涨幅，{today_cn}竞价换手率，"
+        f"{today_cn}上市天数大于3，{prev_cn}个股热度排名前100"
+    )
+    base_tail_query = (
         f"{today_cn}9点23分最低价>={today_cn}9点22分最高价，"
         f"{today_cn}9点22分最低价>={today_cn}9点21分最高价，"
         f"{today_cn}9点21分最低价>={today_cn}9点20分最高价，"
-        f"{today_cn}竞价涨幅，{today_cn}竞价换手率，"
         f"{today_cn}上市天数大于3，{prev_cn}个股热度排名前100"
     )
     detail_query = (
@@ -1002,23 +1583,33 @@ def build_queries(today_ts: pd.Timestamp, prev_ts: pd.Timestamp, prev2_ts: pd.Ti
         f"{today_cn}竞价金额，{today_cn}竞价未匹配金额，{prev_cn}成交金额，"
         f"{today_cn}上市天数大于3，{prev_cn}个股热度排名前100"
     )
-    return {"base": base_query, "detail": detail_query, "amount": amount_query}
+    return {"base": base_query, "base_tail": base_tail_query, "detail": detail_query, "amount": amount_query}
 
 
 def replace_date_markers(columns: pd.Index, mapping: dict[str, str]) -> pd.Index:
     updated = columns.astype(str)
     for token, label in mapping.items():
         updated = updated.str.replace(rf"\[{token}\]", label, regex=True)
+        updated = updated.str.replace(rf"\[{token}(?=\s)", f"[{label}", regex=True)
     return updated
 
 
-def pick_column(columns: list[str], keywords: list[str]) -> str | None:
+def pick_column(
+    columns: list[str],
+    keywords: list[str],
+    exclude_patterns: list[str] | None = None,
+) -> str | None:
+    exclude_patterns = exclude_patterns or []
+
+    def is_allowed(column: str) -> bool:
+        return not any(re.search(pattern, column) for pattern in exclude_patterns)
+
     for keyword in keywords:
-        exact = [column for column in columns if column == keyword]
+        exact = [column for column in columns if column == keyword and is_allowed(column)]
         if exact:
             return exact[0]
     for keyword in keywords:
-        partial = [column for column in columns if keyword in column]
+        partial = [column for column in columns if keyword in column and is_allowed(column)]
         if partial:
             partial.sort(key=len)
             return partial[0]
@@ -1049,8 +1640,36 @@ def standardize_frame(df: pd.DataFrame, date_map: dict[str, str]) -> pd.DataFram
         "个股热度排名昨日": ["个股热度排名昨日", "个股热度排名", "个股热度排名前100"],
         "连续涨停天数昨日": ["连续涨停天数昨日", "连续涨停天数"],
     }
+    date_sensitive_targets = {
+        "竞价涨幅今日",
+        "竞价换手率今日",
+        "竞价匹配金额_openapi",
+        "竞价未匹配金额",
+        "竞价匹配价今日",
+        "竞价量今日",
+        "竞价未匹配量今日",
+        "开盘价:不复权今日",
+        "成交金额昨日",
+        "成交量昨日",
+        "成交量前日",
+        "实体涨跌幅昨日",
+        "实体涨跌幅前日",
+        "个股热度排名昨日",
+        "连续涨停天数昨日",
+    }
+    # If date markers remain after replace_date_markers(), the row came from a
+    # different date than requested. This catches the historical replay bug where
+    # "1月16日" was resolved by iwencai as the current year.
+    date_sensitive_excludes = [r"\[\d{8}"]
     for target, keywords in keyword_mapping.items():
-        source = pick_column(columns, keywords)
+        excludes = date_sensitive_excludes.copy() if target in date_sensitive_targets else []
+        if target == "开盘价:不复权今日":
+            excludes.append(r"分时")
+        source = pick_column(
+            columns,
+            keywords,
+            exclude_patterns=excludes,
+        )
         if source is not None:
             rename_map[source] = target
 
@@ -1114,16 +1733,33 @@ def merge_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
     return merged
 
 
-def compute_factors(df: pd.DataFrame) -> pd.DataFrame:
+def compute_factors(df: pd.DataFrame, auction_ratio_mode: str = DEFAULT_AUCTION_RATIO_MODE) -> pd.DataFrame:
     out = df.copy()
     if "竞价未匹配金额" not in out.columns:
         out["竞价未匹配金额"] = pd.Series(index=out.index, dtype="float64")
-    if "成交金额昨日" not in out.columns:
-        raise RuntimeError("缺少昨日成交金额，无法计算竞昨成交比")
-    out["竞昨成交比"] = pd.to_numeric(out["竞价匹配金额_openapi"], errors="coerce") / pd.to_numeric(
-        out["成交金额昨日"], errors="coerce"
-    )
-    out["昨日前日成交量比"] = out["成交量昨日"] / out["成交量前日"]
+    auction_amount = pd.to_numeric(out["竞价匹配金额_openapi"], errors="coerce")
+    if "成交金额昨日" in out.columns:
+        out["竞昨成交比_成交金额口径"] = auction_amount / pd.to_numeric(out["成交金额昨日"], errors="coerce")
+    else:
+        out["竞昨成交比_成交金额口径"] = pd.Series(index=out.index, dtype="float64")
+    required_estimated_columns = {"开盘价:不复权今日", "竞价涨幅今日", "成交量昨日"}
+    if required_estimated_columns.issubset(out.columns):
+        today_open = pd.to_numeric(out["开盘价:不复权今日"], errors="coerce")
+        auction_change = pd.to_numeric(out["竞价涨幅今日"], errors="coerce") / 100
+        yesterday_volume = pd.to_numeric(out["成交量昨日"], errors="coerce")
+        out["昨收估算"] = today_open / (1 + auction_change)
+        out["昨日成交额估算"] = out["昨收估算"] * yesterday_volume
+        out["竞昨成交比估算"] = auction_amount / out["昨日成交额估算"].replace(0, pd.NA)
+    else:
+        out["竞昨成交比估算"] = pd.Series(index=out.index, dtype="float64")
+    if auction_ratio_mode == "amount":
+        out["竞昨成交比"] = out["竞昨成交比_成交金额口径"]
+    elif auction_ratio_mode == "estimated":
+        out["竞昨成交比"] = out["竞昨成交比估算"]
+    else:
+        raise ValueError(f"未知竞昨成交比口径: {auction_ratio_mode}")
+    out["竞昨成交比口径"] = auction_ratio_mode
+    out["昨日前日成交量比"] = pd.to_numeric(out["成交量昨日"], errors="coerce") / pd.to_numeric(out["成交量前日"], errors="coerce")
     out["竞价未匹配占比"] = pd.to_numeric(out["竞价未匹配金额"], errors="coerce") / pd.to_numeric(
         out["竞价匹配金额_openapi"], errors="coerce"
     )
@@ -1143,23 +1779,75 @@ def apply_strategy(
     min_auction_change: float | None = MIN_AUCTION_CHANGE,
     max_auction_change: float | None = MAX_AUCTION_CHANGE,
     execution_advice_enabled: bool = EXECUTION_ADVICE_ENABLED,
+    min_market20_high_low_diff: float | None = MIN_MARKET_20_HIGH_LOW_DIFF,
+    min_market60_high_low_diff: float | None = MIN_MARKET_60_HIGH_LOW_DIFF,
+    min_market120_high_low_diff: float | None = MIN_MARKET_120_HIGH_LOW_DIFF,
+    loss_cooldown_status: dict[str, Any] | None = None,
+    prev_body_min: float = PREV_BODY_MIN,
+    auction_ratio_mode: str = DEFAULT_AUCTION_RATIO_MODE,
+    dynamic_auction_ratio_enabled: bool = DYNAMIC_AUCTION_RATIO_ENABLED,
+    volume_shape_risk_filter_enabled: bool = VOLUME_SHAPE_RISK_FILTER_ENABLED,
+    early_weak_continuation_risk_filter_enabled: bool = EARLY_WEAK_CONTINUATION_RISK_FILTER_ENABLED,
+    min_prevday_volume_ratio: float | None = YESTERDAY_PREV_VOLUME_RATIO_MIN,
+    prevday_volume_ratio_filter_enabled: bool = YESTERDAY_PREV_VOLUME_RATIO_FILTER_ENABLED,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     if top_n < 1:
         raise ValueError("top_n 必须大于等于 1")
     effective_top_n = resolve_effective_top_n(snapshot, top_n, dynamic_top_n_enabled)
+    loss_cooldown_status = loss_cooldown_status or {
+        "启用": False,
+        "阈值": LOSS_COOLDOWN_CONSECUTIVE_LOSSES,
+        "冷却天数": LOSS_COOLDOWN_DAYS,
+        "交易记录文件": str(TRADE_RESULT_CSV),
+        "最近亏损数": 0,
+        "触发日期": None,
+        "冷却剩余交易日": 0,
+        "触发": False,
+        "说明": "连续亏损冷却建议未检查",
+    }
+    auction_ratio_layer, effective_auction_ratio = resolve_dynamic_auction_ratio_threshold(
+        snapshot,
+        min_auction_ratio,
+        dynamic_auction_ratio_enabled,
+    )
     status = {
         "交易日期": trade_date.strftime("%Y-%m-%d"),
         "市场快照日期": snapshot.get("日期"),
         "市场20日高低差": snapshot.get("市场20日高低差"),
+        "市场60日高低差": snapshot.get("市场60日高低差"),
+        "市场120日高低差": snapshot.get("市场120日高低差"),
         "开仓开关": snapshot.get("开仓开关"),
         "行业强度口径": sector_source,
         "行业过滤启用": industry_filter_enabled,
         "行业涨幅阈值": INDUSTRY_CHANGE_MIN,
-        "前日实体阈值": PREV_BODY_MIN,
-        "竞昨成交比阈值": min_auction_ratio,
+        "前日实体阈值": prev_body_min,
+        "竞昨成交比口径": auction_ratio_mode,
+        "竞昨成交比阈值": effective_auction_ratio,
+        "竞昨成交比基础阈值": min_auction_ratio,
+        "动态竞昨阈值启用": dynamic_auction_ratio_enabled,
+        "动态竞昨市场分层": auction_ratio_layer,
+        "动态竞昨强市场20阈值": DYNAMIC_AUCTION_RATIO_STRONG_MARKET20_DIFF,
+        "动态竞昨弱市场20阈值": DYNAMIC_AUCTION_RATIO_WEAK_MARKET20_DIFF,
+        "动态竞昨强市场阈值": DYNAMIC_AUCTION_RATIO_STRONG,
+        "动态竞昨中市场阈值": min_auction_ratio,
+        "动态竞昨弱市场阈值": DYNAMIC_AUCTION_RATIO_WEAK,
         "竞价涨幅下限": min_auction_change,
         "竞价涨幅上限": max_auction_change,
+        "市场20日高低差阈值": min_market20_high_low_diff,
+        "市场60日高低差阈值": min_market60_high_low_diff,
+        "市场120日高低差阈值": min_market120_high_low_diff,
+        "连续亏损冷却启用": loss_cooldown_status.get("启用"),
+        "连续亏损阈值": loss_cooldown_status.get("阈值"),
+        "连续亏损冷却天数": loss_cooldown_status.get("冷却天数"),
+        "连续亏损交易记录文件": loss_cooldown_status.get("交易记录文件"),
+        "连续亏损最近亏损数": loss_cooldown_status.get("最近亏损数"),
+        "连续亏损触发日期": loss_cooldown_status.get("触发日期"),
+        "连续亏损冷却剩余交易日": loss_cooldown_status.get("冷却剩余交易日"),
+        "连续亏损冷却触发": loss_cooldown_status.get("触发"),
+        "连续亏损冷却说明": loss_cooldown_status.get("说明"),
         "未匹配占比阈值": min_unmatched_ratio,
+        "昨日前日成交量比下限": min_prevday_volume_ratio,
+        "昨日前日成交量比过滤启用": prevday_volume_ratio_filter_enabled,
         "仓位规则": POSITION_WEIGHT_POLICY_NAME,
         "仓位市场分层": resolve_market_layer(snapshot),
         "配置最大入选数": top_n,
@@ -1170,30 +1858,72 @@ def apply_strategy(
         "盘后弱承接风控阈值": ENTRY_DAY_LOW_FROM_OPEN_RISK_EXIT,
         "挂单建议启用": execution_advice_enabled,
         "昨日前日量比风险阈值": YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD,
+        "量价结构风险过滤启用": volume_shape_risk_filter_enabled,
+        "量价结构风险规则": describe_volume_shape_risk_rule(),
+        "早期弱承接风险过滤启用": early_weak_continuation_risk_filter_enabled,
+        "早期弱承接风险规则": describe_early_weak_continuation_risk_rule(),
         "原始候选数": int(len(df)),
+        "昨日前日成交量比过滤后": 0,
+        "昨日前日成交量比过滤数": 0,
+        "早期弱承接风险过滤后": 0,
+        "早期弱承接风险过滤数": 0,
     }
 
-    if snapshot.get("开仓开关") != "通过":
+    market_filter_specs = [
+        ("市场20日高低差", min_market20_high_low_diff),
+        ("市场60日高低差", min_market60_high_low_diff),
+        ("市场120日高低差", min_market120_high_low_diff),
+    ]
+    market_values: dict[str, float] = {}
+    market_fail_reasons: list[str] = []
+    for field, threshold in market_filter_specs:
+        value = pd.to_numeric(pd.Series([snapshot.get(field)]), errors="coerce").iloc[0]
+        if pd.notna(value):
+            market_values[field] = float(value)
+        if threshold is None:
+            continue
+        if pd.isna(value):
+            raise RuntimeError(f"缺少{field}，无法执行市场环境过滤")
+        if float(value) < threshold:
+            market_fail_reasons.append(f"{field} {float(value):.0f} < {threshold:g}")
+    if market_fail_reasons:
+        status["开仓开关"] = "不通过"
+        status["市场宽度过滤后"] = 0
+        status["市场60过滤后"] = 0
         status["金额过滤后"] = 0
         status["竞昨过滤后"] = 0
         status["竞价涨幅过滤后"] = 0
         status["实体过滤后"] = 0
+        status["量价结构风险过滤后"] = 0
+        status["量价结构风险过滤数"] = 0
+        status["早期弱承接风险过滤后"] = 0
+        status["早期弱承接风险过滤数"] = 0
+        status["昨日前日成交量比过滤后"] = 0
+        status["昨日前日成交量比过滤数"] = 0
         status["行业过滤后"] = 0
         status["未匹配过滤后"] = 0
         status["最终候选数"] = 0
         status["入选数"] = 0
         status["入选量比风险数"] = 0
-        status["结果说明"] = "市场开关未通过，今日空仓"
-        return df.head(0).copy(), df.head(0).copy(), status
+        status["结果说明"] = "；".join(market_fail_reasons) + "，今日空仓"
+        empty = df.head(0).copy()
+        for field, value in market_values.items():
+            empty[field] = value
+        return empty, empty.copy(), status
+    status["开仓开关"] = "通过"
+    status["市场宽度过滤后"] = int(len(df))
+    status["市场60过滤后"] = int(len(df))
 
     filtered = df.copy()
+    for field, value in market_values.items():
+        filtered[field] = value
     filtered = filtered[filtered["竞价匹配金额_openapi"] >= MIN_AUCTION_AMOUNT].copy()
     status["金额过滤后"] = int(len(filtered))
-    if min_auction_ratio is not None:
+    if effective_auction_ratio is not None:
         if "竞昨成交比" not in filtered.columns:
             raise RuntimeError("缺少竞昨成交比，无法执行竞昨成交比过滤")
         auction_ratio = pd.to_numeric(filtered["竞昨成交比"], errors="coerce")
-        filtered = filtered[auction_ratio >= min_auction_ratio].copy()
+        filtered = filtered[auction_ratio >= effective_auction_ratio].copy()
     status["竞昨过滤后"] = int(len(filtered))
     if min_auction_change is not None or max_auction_change is not None:
         if "竞价涨幅今日" not in filtered.columns:
@@ -1208,13 +1938,75 @@ def apply_strategy(
     status["竞价涨幅过滤后"] = int(len(filtered))
     yesterday_body = pd.to_numeric(filtered["实体涨跌幅昨日"], errors="coerce")
     prev_body = pd.to_numeric(filtered["实体涨跌幅前日"], errors="coerce")
-    filtered = filtered[(yesterday_body < prev_body) & (prev_body >= PREV_BODY_MIN)].copy()
+    filtered = filtered[(yesterday_body < prev_body) & (prev_body >= prev_body_min)].copy()
     status["实体过滤后"] = int(len(filtered))
+    if not filtered.empty:
+        required_volume_shape_columns = [
+            "昨日前日成交量比",
+            "实体涨跌幅昨日",
+            "实体涨跌幅前日",
+            "市场20日高低差",
+        ]
+        missing_volume_shape_columns = [
+            column for column in required_volume_shape_columns if column not in filtered.columns
+        ]
+        if missing_volume_shape_columns:
+            raise RuntimeError(
+                "缺少量价结构风险过滤字段: " + "、".join(missing_volume_shape_columns)
+            )
+        shape_risk_records = [build_volume_shape_risk(row) for _, row in filtered.iterrows()]
+        for column in ["量价结构风险", "量价结构提示"]:
+            filtered[column] = [record[column] for record in shape_risk_records]
+        if volume_shape_risk_filter_enabled:
+            shape_risk_mask = filtered["量价结构风险"].eq("剔除")
+            status["量价结构风险过滤数"] = int(shape_risk_mask.sum())
+            filtered = filtered[~shape_risk_mask].copy()
+        else:
+            status["量价结构风险过滤数"] = 0
+    else:
+        status["量价结构风险过滤数"] = 0
+    status["量价结构风险过滤后"] = int(len(filtered))
+    if not filtered.empty:
+        required_early_risk_columns = [
+            "市场20日高低差",
+            "市场120日高低差",
+            "实体涨跌幅昨日",
+            "竞价涨幅今日",
+        ]
+        missing_early_risk_columns = [
+            column for column in required_early_risk_columns if column not in filtered.columns
+        ]
+        if missing_early_risk_columns:
+            raise RuntimeError(
+                "缺少早期弱承接风险过滤字段: " + "、".join(missing_early_risk_columns)
+            )
+        early_risk_records = [build_early_weak_continuation_risk(row) for _, row in filtered.iterrows()]
+        for column in ["早期弱承接风险", "早期弱承接提示"]:
+            filtered[column] = [record[column] for record in early_risk_records]
+        if early_weak_continuation_risk_filter_enabled:
+            early_risk_mask = filtered["早期弱承接风险"].eq("剔除")
+            status["早期弱承接风险过滤数"] = int(early_risk_mask.sum())
+            filtered = filtered[~early_risk_mask].copy()
+        else:
+            status["早期弱承接风险过滤数"] = 0
+    else:
+        status["早期弱承接风险过滤数"] = 0
+    status["早期弱承接风险过滤后"] = int(len(filtered))
     if industry_filter_enabled:
         if "申万一级行业涨跌幅" not in filtered.columns:
             raise RuntimeError("缺少申万一级行业涨跌幅，无法执行行业联动过滤")
         filtered = filtered[pd.to_numeric(filtered["申万一级行业涨跌幅"], errors="coerce") > INDUSTRY_CHANGE_MIN].copy()
     status["行业过滤后"] = int(len(filtered))
+    if prevday_volume_ratio_filter_enabled and min_prevday_volume_ratio is not None:
+        if "昨日前日成交量比" not in filtered.columns:
+            raise RuntimeError("缺少昨日前日成交量比，无法执行昨日前日成交量比过滤")
+        prevday_volume_ratio = pd.to_numeric(filtered["昨日前日成交量比"], errors="coerce")
+        before_prevday_volume_filter = int(len(filtered))
+        filtered = filtered[prevday_volume_ratio >= min_prevday_volume_ratio].copy()
+        status["昨日前日成交量比过滤数"] = before_prevday_volume_filter - int(len(filtered))
+    else:
+        status["昨日前日成交量比过滤数"] = 0
+    status["昨日前日成交量比过滤后"] = int(len(filtered))
     if min_unmatched_ratio is not None:
         if "竞价未匹配占比" not in filtered.columns:
             raise RuntimeError("缺少竞价未匹配占比，无法执行未匹配占比过滤")
@@ -1222,8 +2014,8 @@ def apply_strategy(
         filtered = filtered[unmatched_ratio >= min_unmatched_ratio].copy()
     status["未匹配过滤后"] = int(len(filtered))
     filtered = filtered.sort_values(
-        ["竞价涨幅今日", "竞昨成交比", "个股热度排名昨日", "基础代码"],
-        ascending=[True, False, True, True],
+        ["竞价涨幅今日", "竞价未匹配占比", "竞昨成交比", "个股热度排名昨日", "基础代码"],
+        ascending=[True, False, False, True, True],
         kind="stable",
     ).reset_index(drop=True)
     filtered["排序名次"] = range(1, len(filtered) + 1)
@@ -1233,7 +2025,7 @@ def apply_strategy(
             filtered[column] = [record[column] for record in risk_records]
     selected = filtered.head(effective_top_n).copy()
     if not selected.empty:
-        weight_layer, weights = resolve_position_weights(snapshot, len(selected))
+        weight_layer, weights = resolve_position_weights_for_selection(snapshot, selected)
         status["仓位市场分层"] = weight_layer
         selected["建议动作"] = "开盘按建议权重买入"
         selected["建议权重"] = [round(weight, 4) for weight in weights]
@@ -1250,7 +2042,10 @@ def apply_strategy(
         if "昨日前日量比风险" in selected.columns
         else 0
     )
-    status["结果说明"] = "市场开关通过" if not selected.empty else "市场开关通过，但无符合条件标的"
+    result_note = "市场开关通过" if not selected.empty else "市场开关通过，但无符合条件标的"
+    if loss_cooldown_status.get("触发"):
+        result_note += f"；连续亏损冷却建议触发，仅提示不强制空仓：{loss_cooldown_status.get('说明')}"
+    status["结果说明"] = result_note
     return filtered, selected, status
 
 
@@ -1273,6 +2068,15 @@ def format_change_filter(min_value: Any, max_value: Any) -> str:
     if pd.isna(max_number):
         return f">={float(min_number):g}"
     return f"{float(min_number):g} 到 {float(max_number):g}"
+
+
+def format_market_threshold(value: Any) -> str:
+    if value is None:
+        return "关闭"
+    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(number):
+        return "关闭"
+    return f">={float(number):g}"
 
 
 def format_percent(value: Any) -> str:
@@ -1323,10 +2127,22 @@ def export_outputs(
         "实体涨跌幅前日",
         "个股热度排名昨日",
         "连续涨停天数昨日",
+        "昨收估算",
+        "昨日成交额估算",
+        "竞昨成交比估算",
+        "竞昨成交比_成交金额口径",
         "竞昨成交比",
+        "竞昨成交比口径",
         "昨日前日成交量比",
         "昨日前日量比风险",
         "昨日前日量比提示",
+        "量价结构风险",
+        "量价结构提示",
+        "早期弱承接风险",
+        "早期弱承接提示",
+        "市场20日高低差",
+        "市场60日高低差",
+        "市场120日高低差",
     ]
     keep_candidate = [column for column in candidate_columns if column in export_filtered.columns]
     keep_selected = [
@@ -1360,16 +2176,25 @@ def export_outputs(
         "",
         "## 状态",
         f"- 市场快照日期: `{status.get('市场快照日期')}`",
-        f"- 市场20日高低差: `{status.get('市场20日高低差')}`",
+        f"- 市场20日高低差: `{status.get('市场20日高低差')}` / 阈值 `{format_market_threshold(status.get('市场20日高低差阈值'))}`",
+        f"- 市场60日高低差: `{status.get('市场60日高低差')}` / 阈值 `{format_market_threshold(status.get('市场60日高低差阈值'))}`",
+        f"- 市场120日高低差: `{status.get('市场120日高低差')}` / 阈值 `{format_market_threshold(status.get('市场120日高低差阈值'))}`",
         f"- 开仓开关: `{status.get('开仓开关')}`",
         f"- 行业强度口径: `{status.get('行业强度口径')}`",
         f"- 行业过滤: `{'启用' if status.get('行业过滤启用') else '关闭'}`",
         f"- 行业涨幅阈值: `>{status.get('行业涨幅阈值')}`",
         f"- 前日实体阈值: `>={status.get('前日实体阈值')}`",
+        f"- 竞昨成交比口径: `{status.get('竞昨成交比口径')}`",
         f"- 竞昨成交比阈值: `{format_ratio_threshold(status.get('竞昨成交比阈值'))}`",
+        f"- 动态竞昨阈值: `{'启用' if status.get('动态竞昨阈值启用') else '关闭'}` / `{status.get('动态竞昨市场分层')}`市场 / 强`>={status.get('动态竞昨强市场20阈值')}`用`{format_ratio_threshold(status.get('动态竞昨强市场阈值'))}` / 中用`{format_ratio_threshold(status.get('动态竞昨中市场阈值'))}` / 弱`<{status.get('动态竞昨弱市场20阈值')}`用`{format_ratio_threshold(status.get('动态竞昨弱市场阈值'))}`",
         f"- 竞价涨幅过滤: `{format_change_filter(status.get('竞价涨幅下限'), status.get('竞价涨幅上限'))}`",
         f"- 未匹配占比阈值: `{format_ratio_threshold(status.get('未匹配占比阈值'))}`",
+        f"- 连续亏损冷却建议: `{'建议冷却' if status.get('连续亏损冷却触发') else ('启用' if status.get('连续亏损冷却启用') else '关闭')}` / 最近亏损 `{status.get('连续亏损最近亏损数')}` / 剩余 `{status.get('连续亏损冷却剩余交易日')}` 个交易日 / `仅提示不强制空仓`",
+        f"- 连续亏损建议说明: {status.get('连续亏损冷却说明')}",
+        f"- 昨日前日成交量比过滤: `{'启用' if status.get('昨日前日成交量比过滤启用') else '关闭'}` / 下限 `{format_ratio_threshold(status.get('昨日前日成交量比下限'))}` / 过滤后 `{status.get('昨日前日成交量比过滤后', 0)}` / 剔除 `{status.get('昨日前日成交量比过滤数', 0)}`",
         f"- 昨日前日量比风险提示: `>{status.get('昨日前日量比风险阈值', YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD)} 标记谨慎，不默认剔除` / 入选风险数 `{status.get('入选量比风险数', 0)}`",
+        f"- 量价结构风险过滤: `{'启用' if status.get('量价结构风险过滤启用') else '关闭'}` / 剔除 `{status.get('量价结构风险过滤数', 0)}` / 规则 `{status.get('量价结构风险规则')}`",
+        f"- 早期弱承接过滤: `{'启用' if status.get('早期弱承接风险过滤启用') else '关闭'}` / 剔除 `{status.get('早期弱承接风险过滤数', 0)}` / 规则 `{status.get('早期弱承接风险规则')}`",
         f"- 仓位规则: `{status.get('仓位规则')}` / `{status.get('仓位市场分层')}市场`",
         f"- 挂单建议: `{'启用' if status.get('挂单建议启用') else '关闭'}`",
         f"- 动态持仓: `{'启用' if status.get('动态持仓启用') else '关闭'}`",
@@ -1378,10 +2203,12 @@ def export_outputs(
         f"- 最大入选数: `{status.get('最大入选数', TOP_N)}`",
         f"- {build_risk_exit_note(status)}",
         f"- 原始候选数: `{status.get('原始候选数')}`",
+        f"- 市场宽度过滤后: `{status.get('市场宽度过滤后', 0)}`",
         f"- 金额过滤后: `{status.get('金额过滤后', 0)}`",
         f"- 竞昨过滤后: `{status.get('竞昨过滤后', 0)}`",
         f"- 竞价涨幅过滤后: `{status.get('竞价涨幅过滤后', 0)}`",
         f"- 实体过滤后: `{status.get('实体过滤后', 0)}`",
+        f"- 量价结构风险过滤后: `{status.get('量价结构风险过滤后', 0)}`",
         f"- 行业过滤后: `{status.get('行业过滤后', 0)}`",
         f"- 未匹配过滤后: `{status.get('未匹配过滤后', 0)}`",
         f"- 最终候选数: `{status.get('最终候选数', 0)}`",
@@ -1395,8 +2222,8 @@ def export_outputs(
     else:
         lines.extend(
             [
-                "| 排名 | 股票代码 | 股票简称 | 一级行业 | 行业涨幅 | 行业涨幅排名 | 竞价金额 | 未匹配占比 | 竞昨成交比 | 昨前量比 | 量比风险 | 热度排名昨日 | 建议权重 | 建议动作 | 挂单建议 | 建议溢价 | 上限溢价 | 挂单理由 |",
-                "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- | --- | ---: | ---: | --- |",
+                "| 排名 | 股票代码 | 股票简称 | 一级行业 | 行业涨幅 | 行业涨幅排名 | 竞价金额 | 未匹配占比 | 竞昨成交比 | 昨前量比 | 量比风险 | 量价风险 | 早期弱承接 | 热度排名昨日 | 建议权重 | 建议动作 | 挂单建议 | 建议溢价 | 上限溢价 | 挂单理由 |",
+                "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | ---: | ---: | --- | --- | ---: | ---: | --- |",
             ]
         )
         for _, row in export_selected.iterrows():
@@ -1406,6 +2233,7 @@ def export_outputs(
                 f"{row.get('申万一级行业涨跌幅排名', float('nan')):.0f} | "
                 f"{row['竞价匹配金额_openapi']:.0f} | {row.get('竞价未匹配占比', float('nan')):.4f} | {row['竞昨成交比']:.4f} | "
                 f"{row.get('昨日前日成交量比', float('nan')):.2f} | {row.get('昨日前日量比风险', '-')} | "
+                f"{row.get('量价结构风险', '-')} | {row.get('早期弱承接风险', '-')} | "
                 f"{row['个股热度排名昨日']:.0f} | {row.get('建议权重', float('nan')):.4f} | {row['建议动作']} | "
                 f"{row.get('挂单建议', '-')} | {format_percent(row.get('建议挂单溢价'))} | {format_percent(row.get('挂单上限溢价'))} | "
                 f"{row.get('挂单建议理由', '')} |"
@@ -1447,18 +2275,24 @@ def build_pushplus_content(trade_date: pd.Timestamp, selected_df: pd.DataFrame, 
     top_n = int(status.get("最大入选数") or TOP_N)
     lines = [
         f"交易日期: {trade_date.strftime('%Y-%m-%d')}",
-        f"市场开关: {status.get('开仓开关')} / 市场20日高低差={status.get('市场20日高低差')}",
+        f"市场开关: {status.get('开仓开关')} / 市场20日={status.get('市场20日高低差')} / 市场60日={status.get('市场60日高低差')} / 市场120日={status.get('市场120日高低差')}",
         f"行业口径: {status.get('行业强度口径')}",
         f"行业过滤: {'启用' if status.get('行业过滤启用') else '关闭'}",
+        f"市场宽度阈值: 20日{format_market_threshold(status.get('市场20日高低差阈值'))} / 60日{format_market_threshold(status.get('市场60日高低差阈值'))} / 120日{format_market_threshold(status.get('市场120日高低差阈值'))}",
         f"竞昨成交比阈值: {format_ratio_threshold(status.get('竞昨成交比阈值'))}",
+        f"动态竞昨阈值: {'启用' if status.get('动态竞昨阈值启用') else '关闭'} / {status.get('动态竞昨市场分层')}市场 / 强>={status.get('动态竞昨强市场20阈值')}用{format_ratio_threshold(status.get('动态竞昨强市场阈值'))} / 中用{format_ratio_threshold(status.get('动态竞昨中市场阈值'))} / 弱<{status.get('动态竞昨弱市场20阈值')}用{format_ratio_threshold(status.get('动态竞昨弱市场阈值'))}",
         f"竞价涨幅过滤: {format_change_filter(status.get('竞价涨幅下限'), status.get('竞价涨幅上限'))}",
         f"未匹配占比阈值: {format_ratio_threshold(status.get('未匹配占比阈值'))}",
+        f"昨日前日成交量比过滤: {'启用' if status.get('昨日前日成交量比过滤启用') else '关闭'} / 下限{format_ratio_threshold(status.get('昨日前日成交量比下限'))} / 过滤后{status.get('昨日前日成交量比过滤后', 0)} / 剔除{status.get('昨日前日成交量比过滤数', 0)}",
+        f"连续亏损冷却建议: {'建议冷却' if status.get('连续亏损冷却触发') else ('启用' if status.get('连续亏损冷却启用') else '关闭')} / 最近亏损{status.get('连续亏损最近亏损数')} / 剩余{status.get('连续亏损冷却剩余交易日')}日 / 仅提示不强制空仓",
         f"昨日前日量比风险: >{status.get('昨日前日量比风险阈值', YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD)} 标记谨慎，不默认剔除 / 入选风险数{status.get('入选量比风险数', 0)}",
+        f"量价结构风险过滤: {'启用' if status.get('量价结构风险过滤启用') else '关闭'} / 剔除{status.get('量价结构风险过滤数', 0)}",
+        f"早期弱承接过滤: {'启用' if status.get('早期弱承接风险过滤启用') else '关闭'} / 剔除{status.get('早期弱承接风险过滤数', 0)}",
         f"仓位规则: {status.get('仓位规则')} / {status.get('仓位市场分层')}市场",
         f"挂单建议: {'启用' if status.get('挂单建议启用') else '关闭'}",
         f"动态持仓: {'启用' if status.get('动态持仓启用') else '关闭'} / 配置TOP{status.get('配置最大入选数', TOP_N)} -> 今日TOP{status.get('最大入选数', TOP_N)}",
         build_risk_exit_note(status),
-        f"过滤: 原始{status.get('原始候选数', 0)} -> 金额{status.get('金额过滤后', 0)} -> 竞昨{status.get('竞昨过滤后', 0)} -> 竞价涨幅{status.get('竞价涨幅过滤后', 0)} -> 实体{status.get('实体过滤后', 0)} -> 行业{status.get('行业过滤后', 0)} -> 未匹配{status.get('未匹配过滤后', 0)} -> 入选{status.get('入选数', 0)}",
+        f"过滤: 原始{status.get('原始候选数', 0)} -> 市场宽度{status.get('市场宽度过滤后', 0)} -> 金额{status.get('金额过滤后', 0)} -> 竞昨{status.get('竞昨过滤后', 0)} -> 竞价涨幅{status.get('竞价涨幅过滤后', 0)} -> 实体{status.get('实体过滤后', 0)} -> 量价结构{status.get('量价结构风险过滤后', 0)} -> 行业{status.get('行业过滤后', 0)} -> 未匹配{status.get('未匹配过滤后', 0)} -> 入选{status.get('入选数', 0)}",
         f"说明: {status.get('结果说明')}",
         "",
     ]
@@ -1478,6 +2312,8 @@ def build_pushplus_content(trade_date: pd.Timestamp, selected_df: pd.DataFrame, 
                 f"未匹配占比: {format_push_number(row.get('竞价未匹配占比'), 4)}",
                 f"竞昨成交比: {format_push_number(row.get('竞昨成交比'), 4)}",
                 f"昨日前日量比: {format_push_number(row.get('昨日前日成交量比'), 2)} / 风险: {row.get('昨日前日量比风险', '-')}",
+                f"量价结构风险: {row.get('量价结构风险', '-')}",
+                f"早期弱承接风险: {row.get('早期弱承接风险', '-')}",
                 f"昨日热度排名: {format_push_number(row.get('个股热度排名昨日'), 0)}",
                 f"挂单建议: {row.get('挂单建议', '-')} / 建议溢价{format_percent(row.get('建议挂单溢价'))} / 上限{format_percent(row.get('挂单上限溢价'))}",
                 f"挂单理由: {row.get('挂单建议理由', '-')}",
@@ -1525,11 +2361,21 @@ def main() -> None:
         historical_replay,
     )
     required_snapshot_date = None if historical_replay else prev_ts
-    snapshot = read_market_snapshot(today_ts, historical_replay, required_snapshot_date)
+    market60_filter_required = not args.no_market60_filter and args.min_market60_high_low_diff is not None
+    market120_filter_required = not args.no_market120_filter and args.min_market120_high_low_diff is not None
+    snapshot = read_market_snapshot(
+        today_ts,
+        historical_replay,
+        required_snapshot_date,
+        market60_filter_required,
+        market120_filter_required,
+    )
     logging.info(
-        "市场快照 date=%s diff20=%s switch=%s",
+        "市场快照 date=%s diff20=%s diff60=%s diff120=%s switch=%s",
         snapshot.get("日期"),
         snapshot.get("市场20日高低差"),
+        snapshot.get("市场60日高低差"),
+        snapshot.get("市场120日高低差"),
         snapshot.get("开仓开关"),
     )
     cookies = resolve_cookies()
@@ -1543,8 +2389,8 @@ def main() -> None:
     frames = []
     raw_frames: dict[str, pd.DataFrame] = {}
     standardized_frames: dict[str, pd.DataFrame] = {}
-    for label in ["base", "detail", "amount"]:
-        frame = query_wencai(queries[label], cookies)
+    for label, question in queries.items():
+        frame = query_wencai(question, cookies)
         logging.info("问财查询完成 label=%s rows=%s", label, len(frame))
         raw_frames[label] = frame.copy()
         standardized = standardize_frame(frame, date_map)
@@ -1555,11 +2401,23 @@ def main() -> None:
     if merged.empty:
         raise RuntimeError("问财返回为空，无法生成操作清单")
 
-    merged = compute_factors(merged)
+    merged = compute_factors(merged, args.auction_ratio_mode)
     merged, sector_df, sector_source = attach_sector_context(merged, today_ts, historical_replay)
     min_auction_ratio = None if args.no_auction_ratio_filter else args.min_auction_ratio
     min_auction_change = None if args.no_auction_change_filter else args.min_auction_change
     max_auction_change = None if args.no_auction_change_filter else args.max_auction_change
+    min_market20_high_low_diff = None if args.no_market20_filter else args.min_market20_high_low_diff
+    min_market60_high_low_diff = None if args.no_market60_filter else args.min_market60_high_low_diff
+    min_market120_high_low_diff = None if args.no_market120_filter else args.min_market120_high_low_diff
+    min_prevday_volume_ratio = None if args.no_prevday_volume_ratio_filter else args.min_prevday_volume_ratio
+    loss_cooldown_status = build_loss_cooldown_status(
+        today_ts,
+        args.trade_result_file,
+        not args.no_loss_cooldown,
+        args.loss_cooldown_consecutive_losses,
+        args.loss_cooldown_days,
+    )
+    logging.info("连续亏损冷却状态: %s", loss_cooldown_status)
     filtered, selected, status = apply_strategy(
         merged,
         snapshot,
@@ -1573,6 +2431,17 @@ def main() -> None:
         min_auction_change,
         max_auction_change,
         not args.no_execution_advice,
+        min_market20_high_low_diff,
+        min_market60_high_low_diff,
+        min_market120_high_low_diff,
+        loss_cooldown_status,
+        args.prev_body_min,
+        args.auction_ratio_mode,
+        args.dynamic_auction_ratio,
+        not args.no_volume_shape_risk_filter,
+        not args.no_early_weak_continuation_filter,
+        min_prevday_volume_ratio,
+        not args.no_prevday_volume_ratio_filter,
     )
     export_outputs(today_ts, filtered, selected, status, queries)
     archive_dir = archive_daily_data(
@@ -1599,31 +2468,55 @@ def main() -> None:
         push_content = build_pushplus_content(today_ts, selected, status)
         send_pushplus(push_title, push_content)
     logging.info(
-        "运行成功 trade_date=%s raw=%s amount=%s auction_ratio=%s auction_change=%s body=%s industry=%s unmatched=%s selected=%s",
+        "运行成功 trade_date=%s raw=%s market_width=%s cooldown=%s amount=%s auction_ratio=%s auction_change=%s body=%s volume_shape=%s industry=%s unmatched=%s selected=%s",
         status.get("交易日期"),
         status.get("原始候选数"),
+        status.get("市场宽度过滤后"),
+        status.get("连续亏损冷却触发"),
         status.get("金额过滤后"),
         status.get("竞昨过滤后"),
         status.get("竞价涨幅过滤后"),
         status.get("实体过滤后"),
+        status.get("量价结构风险过滤后"),
         status.get("行业过滤后"),
         status.get("未匹配过滤后"),
         status.get("入选数"),
     )
 
     print(f"交易日期: {status['交易日期']}")
-    print(f"市场开关: {status['开仓开关']} / 市场20日高低差={status['市场20日高低差']}")
+    print(
+        f"市场开关: {status['开仓开关']} / 市场20日高低差={status['市场20日高低差']} / "
+        f"阈值{format_market_threshold(status.get('市场20日高低差阈值'))} / "
+        f"市场60日高低差={status.get('市场60日高低差')} / 阈值{format_market_threshold(status.get('市场60日高低差阈值'))} / "
+        f"市场120日高低差={status.get('市场120日高低差')} / 阈值{format_market_threshold(status.get('市场120日高低差阈值'))}"
+    )
     print(
         f"行业口径: {status['行业强度口径']} / "
         f"行业过滤={'启用' if status.get('行业过滤启用') else '关闭'} / "
         f"阈值=涨幅>{status['行业涨幅阈值']}"
     )
+    print(f"竞昨成交比口径: {status.get('竞昨成交比口径')}")
     print(f"竞昨成交比阈值: {format_ratio_threshold(status.get('竞昨成交比阈值'))}")
     print(f"竞价涨幅过滤: {format_change_filter(status.get('竞价涨幅下限'), status.get('竞价涨幅上限'))}")
     print(f"未匹配占比阈值: {format_ratio_threshold(status.get('未匹配占比阈值'))}")
     print(
+        f"昨日前日成交量比过滤: {'启用' if status.get('昨日前日成交量比过滤启用') else '关闭'} / "
+        f"下限{format_ratio_threshold(status.get('昨日前日成交量比下限'))} / "
+        f"过滤后={status.get('昨日前日成交量比过滤后', 0)} / 剔除={status.get('昨日前日成交量比过滤数', 0)}"
+    )
+    print(
+        f"连续亏损冷却建议: {'建议冷却' if status.get('连续亏损冷却触发') else ('启用' if status.get('连续亏损冷却启用') else '关闭')} / "
+        f"最近亏损={status.get('连续亏损最近亏损数')} / 剩余={status.get('连续亏损冷却剩余交易日')}个交易日"
+    )
+    print("连续亏损冷却建议仅提示不强制空仓")
+    print(f"连续亏损建议说明: {status.get('连续亏损冷却说明')}")
+    print(
         f"昨日前日量比风险提示: >{status.get('昨日前日量比风险阈值', YESTERDAY_PREV_VOLUME_RATIO_RISK_THRESHOLD)} 标记谨慎，"
         f"不默认剔除 / 入选风险数={status.get('入选量比风险数', 0)}"
+    )
+    print(
+        f"量价结构风险过滤: {'启用' if status.get('量价结构风险过滤启用') else '关闭'} / "
+        f"剔除={status.get('量价结构风险过滤数', 0)} / 过滤后={status.get('量价结构风险过滤后', 0)}"
     )
     print(f"仓位规则: {status.get('仓位规则')} / {status.get('仓位市场分层')}市场")
     print(f"挂单建议: {'启用' if status.get('挂单建议启用') else '关闭'}")
@@ -1636,6 +2529,7 @@ def main() -> None:
     print(build_risk_exit_note(status))
     print(f"最大入选数: {status['最大入选数']}")
     print(f"原始候选数: {status['原始候选数']}")
+    print(f"市场宽度过滤后: {status['市场宽度过滤后']}")
     print(f"金额过滤后: {status['金额过滤后']}")
     print(f"竞昨过滤后: {status['竞昨过滤后']}")
     print(f"竞价涨幅过滤后: {status['竞价涨幅过滤后']}")

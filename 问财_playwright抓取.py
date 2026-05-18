@@ -300,6 +300,8 @@ def install_response_collector(
 
 
 def fetch_expanded_robot_payload(context, robot_requests: list[dict[str, Any]], perpage: int) -> dict[str, Any] | None:
+    if perpage <= 0:
+        return None
     if not robot_requests:
         return None
     request_info = robot_requests[-1]
@@ -561,6 +563,10 @@ def run_strategy(args: argparse.Namespace) -> int:
     strategy = load_strategy_module()
     arg_min_auction_change = getattr(args, "min_auction_change", None)
     arg_max_auction_change = getattr(args, "max_auction_change", None)
+    arg_min_market20_high_low_diff = getattr(args, "min_market20_high_low_diff", None)
+    arg_min_market60_high_low_diff = getattr(args, "min_market60_high_low_diff", None)
+    arg_min_market120_high_low_diff = getattr(args, "min_market120_high_low_diff", None)
+    arg_min_prevday_volume_ratio = getattr(args, "min_prevday_volume_ratio", None)
     strategy_args = argparse.Namespace(
         trade_date=args.trade_date,
         push=args.push,
@@ -577,6 +583,16 @@ def run_strategy(args: argparse.Namespace) -> int:
             else strategy.MIN_AUCTION_TO_YESTERDAY_RATIO
         ),
         no_auction_ratio_filter=args.no_auction_ratio_filter,
+        auction_ratio_mode=(
+            args.auction_ratio_mode
+            if getattr(args, "auction_ratio_mode", None) is not None
+            else getattr(strategy, "DEFAULT_AUCTION_RATIO_MODE", "estimated")
+        ),
+        dynamic_auction_ratio=(
+            args.dynamic_auction_ratio
+            if getattr(args, "dynamic_auction_ratio", None) is not None
+            else getattr(strategy, "DYNAMIC_AUCTION_RATIO_ENABLED", True)
+        ),
         min_auction_change=(
             arg_min_auction_change
             if arg_min_auction_change is not None
@@ -588,10 +604,69 @@ def run_strategy(args: argparse.Namespace) -> int:
             else getattr(strategy, "MAX_AUCTION_CHANGE", None)
         ),
         no_auction_change_filter=getattr(args, "no_auction_change_filter", False),
+        min_market20_high_low_diff=(
+            arg_min_market20_high_low_diff
+            if arg_min_market20_high_low_diff is not None
+            else getattr(strategy, "MIN_MARKET_20_HIGH_LOW_DIFF", None)
+        ),
+        no_market20_filter=getattr(args, "no_market20_filter", False),
+        min_market60_high_low_diff=(
+            arg_min_market60_high_low_diff
+            if arg_min_market60_high_low_diff is not None
+            else getattr(strategy, "MIN_MARKET_60_HIGH_LOW_DIFF", None)
+        ),
+        no_market60_filter=getattr(args, "no_market60_filter", False),
+        min_market120_high_low_diff=(
+            arg_min_market120_high_low_diff
+            if arg_min_market120_high_low_diff is not None
+            else getattr(strategy, "MIN_MARKET_120_HIGH_LOW_DIFF", None)
+        ),
+        no_market120_filter=getattr(args, "no_market120_filter", False),
+        prev_body_min=(
+            args.prev_body_min
+            if getattr(args, "prev_body_min", None) is not None
+            else getattr(strategy, "PREV_BODY_MIN", 0.0)
+        ),
+        trade_result_file=(
+            args.trade_result_file
+            if getattr(args, "trade_result_file", None) is not None
+            else str(getattr(strategy, "TRADE_RESULT_CSV", "实盘交易记录.csv"))
+        ),
+        loss_cooldown_consecutive_losses=(
+            args.loss_cooldown_consecutive_losses
+            if getattr(args, "loss_cooldown_consecutive_losses", None) is not None
+            else getattr(strategy, "LOSS_COOLDOWN_CONSECUTIVE_LOSSES", 2)
+        ),
+        loss_cooldown_days=(
+            args.loss_cooldown_days
+            if getattr(args, "loss_cooldown_days", None) is not None
+            else getattr(strategy, "LOSS_COOLDOWN_DAYS", 1)
+        ),
+        no_loss_cooldown=getattr(args, "no_loss_cooldown", not getattr(strategy, "LOSS_COOLDOWN_ENABLED", True)),
         min_unmatched_ratio=(
             args.min_unmatched_ratio
             if args.min_unmatched_ratio is not None
             else strategy.DEFAULT_MIN_UNMATCHED_RATIO
+        ),
+        min_prevday_volume_ratio=(
+            arg_min_prevday_volume_ratio
+            if arg_min_prevday_volume_ratio is not None
+            else getattr(strategy, "YESTERDAY_PREV_VOLUME_RATIO_MIN", 0.4)
+        ),
+        no_prevday_volume_ratio_filter=getattr(
+            args,
+            "no_prevday_volume_ratio_filter",
+            not getattr(strategy, "YESTERDAY_PREV_VOLUME_RATIO_FILTER_ENABLED", True),
+        ),
+        no_volume_shape_risk_filter=getattr(
+            args,
+            "no_volume_shape_risk_filter",
+            not getattr(strategy, "VOLUME_SHAPE_RISK_FILTER_ENABLED", True),
+        ),
+        no_early_weak_continuation_filter=getattr(
+            args,
+            "no_early_weak_continuation_filter",
+            not getattr(strategy, "EARLY_WEAK_CONTINUATION_RISK_FILTER_ENABLED", True),
         ),
         industry_filter=(
             args.industry_filter
@@ -645,12 +720,50 @@ def main() -> int:
         action="store_false",
         help="策略模式下启用动态持仓，按市场强弱自动降低入选数",
     )
-    parser.add_argument("--min-auction-ratio", type=float, default=None, help="策略模式下竞昨成交比最低阈值")
+    parser.add_argument("--min-auction-ratio", type=float, default=None, help="策略模式下竞昨成交比中市场阈值")
+    auction_ratio_dynamic_group = parser.add_mutually_exclusive_group()
+    auction_ratio_dynamic_group.add_argument(
+        "--dynamic-auction-ratio",
+        dest="dynamic_auction_ratio",
+        action="store_true",
+        default=None,
+        help="策略模式下启用市场20日分层动态竞昨阈值，默认跟随正式脚本",
+    )
+    auction_ratio_dynamic_group.add_argument(
+        "--fixed-auction-ratio",
+        dest="dynamic_auction_ratio",
+        action="store_false",
+        help="策略模式下关闭市场20日分层，固定使用 --min-auction-ratio",
+    )
+    parser.add_argument("--auction-ratio-mode", choices=["estimated", "amount"], default=None, help="策略模式下竞昨成交比口径，默认跟随正式脚本")
     parser.add_argument("--no-auction-ratio-filter", action="store_true", help="策略模式下关闭竞昨成交比过滤")
     parser.add_argument("--min-auction-change", type=float, default=None, help="策略模式下竞价涨幅最低阈值，默认跟随正式脚本")
     parser.add_argument("--max-auction-change", type=float, default=None, help="策略模式下竞价涨幅最高阈值，默认跟随正式脚本")
     parser.add_argument("--no-auction-change-filter", action="store_true", help="策略模式下关闭竞价涨幅过滤")
+    parser.add_argument("--min-market20-high-low-diff", type=float, default=None, help="策略模式下市场20日高低差最低阈值，默认跟随正式脚本")
+    parser.add_argument("--no-market20-filter", action="store_true", help="策略模式下关闭市场20日高低差过滤")
+    parser.add_argument("--min-market60-high-low-diff", type=float, default=None, help="策略模式下市场60日高低差最低阈值，默认跟随正式脚本；当前正式脚本默认关闭")
+    parser.add_argument("--no-market60-filter", action="store_true", help="策略模式下关闭市场60日高低差过滤")
+    parser.add_argument("--min-market120-high-low-diff", type=float, default=None, help="策略模式下市场120日高低差最低阈值，默认跟随正式脚本")
+    parser.add_argument("--no-market120-filter", action="store_true", help="策略模式下关闭市场120日高低差过滤")
+    parser.add_argument("--prev-body-min", type=float, default=None, help="策略模式下前日实体涨跌幅最低阈值，默认跟随正式脚本；测试放宽可传 -5")
+    parser.add_argument("--trade-result-file", default=None, help="策略模式下已完成实盘交易记录CSV，用于冷却建议，默认跟随正式脚本")
+    parser.add_argument("--loss-cooldown-consecutive-losses", type=int, default=None, help="策略模式下连续亏损冷却建议阈值，默认跟随正式脚本")
+    parser.add_argument("--loss-cooldown-days", type=int, default=None, help="策略模式下连续亏损建议冷却天数，默认跟随正式脚本")
+    parser.add_argument("--no-loss-cooldown", action="store_true", help="策略模式下关闭连续亏损冷却建议")
     parser.add_argument("--min-unmatched-ratio", type=float, default=None, help="策略模式下竞价未匹配占比最低阈值")
+    parser.add_argument("--min-prevday-volume-ratio", type=float, default=None, help="策略模式下昨日前日成交量比最低阈值")
+    parser.add_argument("--no-prevday-volume-ratio-filter", action="store_true", help="策略模式下关闭昨日前日成交量比硬过滤")
+    parser.add_argument(
+        "--no-volume-shape-risk-filter",
+        action="store_true",
+        help="策略模式下关闭量价结构风险硬过滤，默认跟随正式脚本",
+    )
+    parser.add_argument(
+        "--no-early-weak-continuation-filter",
+        action="store_true",
+        help="策略模式下关闭早期弱承接风险硬过滤，默认跟随正式脚本",
+    )
     parser.add_argument("--no-execution-advice", action="store_true", help="策略模式下不输出挂单建议列")
     industry_group = parser.add_mutually_exclusive_group()
     industry_group.add_argument(
@@ -673,7 +786,7 @@ def main() -> int:
     parser.add_argument("--max-scrolls", type=int, default=12, help="每个问财页面最多向下滚动次数")
     parser.add_argument("--stable-scrolls", type=int, default=3, help="行数连续多少次不增长后停止")
     parser.add_argument("--max-pages", type=int, default=10, help="每个问财页面最多自动点击分页页数")
-    parser.add_argument("--expanded-perpage", type=int, default=100, help="复用页面请求时尝试一次拉取的最大行数")
+    parser.add_argument("--expanded-perpage", type=int, default=100, help="复用页面请求时尝试一次拉取的最大行数；设为0则禁用额外请求，只用浏览器页面加载结果")
     parser.add_argument("--headless", action="store_true", help="无界面运行，不适合首次登录")
     parser.add_argument("--keep-open", action="store_true", help="抓取结束前暂停并保持浏览器打开")
     parser.add_argument("--no-json", action="store_true", help="只输出 CSV，不保存监听到的 JSON")
